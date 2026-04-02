@@ -587,4 +587,4 @@ rollout voxelFillGridUI "Temple Voxel Fill Tool (Voxel Grid)"
     )
 )
 
-createDialog voxelFillGridUI width:300 height:500
+createDialog voxelFillGridUI width:360 height:680
