@@ -210,6 +210,73 @@ rollout voxelFillUI "Temple Voxel Fill Tool"
         (evaluatePointInMesh p obj (getTempleBounds obj))[1]
     )
 
+    fn getPlacementVariation sourceBrick =
+    (
+        local zRotation = 0.0
+        local scaleMultiplier = 1.0
+
+        if randomRotationCheck.checked do
+        (
+            local minRotation = amin rotMinSpinner.value rotMaxSpinner.value
+            local maxRotation = amax rotMinSpinner.value rotMaxSpinner.value
+            zRotation = random minRotation maxRotation
+        )
+
+        if randomScaleCheck.checked do
+        (
+            local minScale = amin scaleMinSpinner.value scaleMaxSpinner.value
+            local maxScale = amax scaleMinSpinner.value scaleMaxSpinner.value
+            scaleMultiplier = (random minScale maxScale) / 100.0
+        )
+
+        #(zRotation, scaleMultiplier)
+    )
+
+    fn getPlacementEnvelopeSize brickSize placementVariation =
+    (
+        local scaledSize = brickSize * placementVariation[2]
+        local angleRadians = placementVariation[1] * pi / 180.0
+        local cosValue = abs (cos angleRadians)
+        local sinValue = abs (sin angleRadians)
+
+        [(scaledSize.x * cosValue) + (scaledSize.y * sinValue), (scaledSize.x * sinValue) + (scaledSize.y * cosValue), scaledSize.z]
+    )
+
+    fn getPlacementCheckPoints placementPosition halfExtents =
+    (
+        #(
+            placementPosition,
+            placementPosition + [halfExtents.x, 0, 0],
+            placementPosition + [-halfExtents.x, 0, 0],
+            placementPosition + [0, halfExtents.y, 0],
+            placementPosition + [0, -halfExtents.y, 0],
+            placementPosition + [0, 0, halfExtents.z],
+            placementPosition + [0, 0, -halfExtents.z],
+            placementPosition + [halfExtents.x, halfExtents.y, halfExtents.z],
+            placementPosition + [halfExtents.x, halfExtents.y, -halfExtents.z],
+            placementPosition + [halfExtents.x, -halfExtents.y, halfExtents.z],
+            placementPosition + [halfExtents.x, -halfExtents.y, -halfExtents.z],
+            placementPosition + [-halfExtents.x, halfExtents.y, halfExtents.z],
+            placementPosition + [-halfExtents.x, halfExtents.y, -halfExtents.z],
+            placementPosition + [-halfExtents.x, -halfExtents.y, halfExtents.z],
+            placementPosition + [-halfExtents.x, -halfExtents.y, -halfExtents.z]
+        )
+    )
+
+    fn placementFitsVolume placementPosition brickSize placementVariation raycastTarget bounds =
+    (
+        local envelopeSize = getPlacementEnvelopeSize brickSize placementVariation
+        local halfExtents = envelopeSize * 0.5
+        local checkPoints = getPlacementCheckPoints placementPosition halfExtents
+
+        for checkPoint in checkPoints do
+        (
+            if not (evaluatePointInMesh checkPoint raycastTarget bounds)[1] do return false
+        )
+
+        true
+    )
+
     fn clampColorChannel value =
     (
         amin 255 (amax 0 value)
@@ -235,7 +302,7 @@ rollout voxelFillUI "Temple Voxel Fill Tool"
         true
     )
 
-    fn applyPlacementVariation newBrick sourceBrick =
+    fn applyPlacementVariation newBrick sourceBrick placementVariation =
     (
         local baseRotation = sourceBrick.rotation
         local baseScale = sourceBrick.scale
@@ -243,21 +310,8 @@ rollout voxelFillUI "Temple Voxel Fill Tool"
         newBrick.rotation = baseRotation
         newBrick.scale = baseScale
 
-        if randomRotationCheck.checked do
-        (
-            local minRotation = amin rotMinSpinner.value rotMaxSpinner.value
-            local maxRotation = amax rotMinSpinner.value rotMaxSpinner.value
-            local zRotation = random minRotation maxRotation
-            newBrick.rotation = baseRotation * (angleaxis zRotation [0,0,1])
-        )
-
-        if randomScaleCheck.checked do
-        (
-            local minScale = amin scaleMinSpinner.value scaleMaxSpinner.value
-            local maxScale = amax scaleMinSpinner.value scaleMaxSpinner.value
-            local scaleMultiplier = (random minScale maxScale) / 100.0
-            newBrick.scale = [baseScale.x * scaleMultiplier, baseScale.y * scaleMultiplier, baseScale.z * scaleMultiplier]
-        )
+        newBrick.rotation = baseRotation * (angleaxis placementVariation[1] [0,0,1])
+        newBrick.scale = [baseScale.x * placementVariation[2], baseScale.y * placementVariation[2], baseScale.z * placementVariation[2]]
 
         if materialVariationCheck.checked then
         (
@@ -310,6 +364,7 @@ rollout voxelFillUI "Temple Voxel Fill Tool"
                     local p = [x,y,z]
                     local pointResult = evaluatePointInMesh p raycastTarget bounds
                     local isInside = pointResult[1]
+                    local placementVariation = undefined
 
                     if debugCheck.checked do
                     (
@@ -330,10 +385,15 @@ rollout voxelFillUI "Temple Voxel Fill Tool"
 
                     if isInside then
                     (
-                        local newBrick = instance brickObj
-                        newBrick.position = p
-                        applyPlacementVariation newBrick brickObj
-                        created += 1
+                        placementVariation = getPlacementVariation brickObj
+
+                        if placementFitsVolume p voxelSize placementVariation raycastTarget bounds then
+                        (
+                            local newBrick = instance brickObj
+                            newBrick.position = p
+                            applyPlacementVariation newBrick brickObj placementVariation
+                            created += 1
+                        )
                     )
 
                     if (mod processed updateInterval) == 0 or processed == totalSamples do
