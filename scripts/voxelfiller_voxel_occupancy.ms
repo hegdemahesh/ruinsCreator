@@ -206,11 +206,24 @@ rollout voxelFillGridUI "Temple Voxel Fill Tool (Voxel Grid)"
         if isCellInBounds x y z counts and not (hashHasKey surfaceVoxels key) do queue.Enqueue #(x, y, z)
     )
 
+    fn enqueueFloodNeighbor queue queuedVoxels surfaceVoxels exteriorVoxels counts x y z =
+    (
+        local key = makeVoxelKey x y z
+
+        if isCellInBounds x y z counts and not (hashHasKey queuedVoxels key) and not (hashHasKey surfaceVoxels key) and not (hashHasKey exteriorVoxels key) then
+        (
+            setHashTrue queuedVoxels key
+            queue.Enqueue #(x, y, z)
+        )
+    )
+
     fn floodFillExterior surfaceVoxels counts totalSamples processedCount createdCount =
     (
         local exteriorVoxels = dotNetObject "System.Collections.Hashtable"
+        local queuedVoxels = dotNetObject "System.Collections.Hashtable"
         local queue = dotNetObject "System.Collections.Queue"
         local processed = processedCount
+        local seedCount = 0
 
         for x = 0 to (counts[1] - 1) do
         (
@@ -239,6 +252,10 @@ rollout voxelFillGridUI "Temple Voxel Fill Tool (Voxel Grid)"
             )
         )
 
+        for queuedCell in queue do setHashTrue queuedVoxels (makeVoxelKey queuedCell[1] queuedCell[2] queuedCell[3])
+        seedCount = queue.Count
+        debugLog ("Flood fill start: boundary seeds=" + seedCount as string + " surface voxels=" + surfaceVoxels.Count as string)
+
         while queue.Count > 0 and not fillCancelled do
         (
             local cell = queue.Dequeue()
@@ -250,17 +267,24 @@ rollout voxelFillGridUI "Temple Voxel Fill Tool (Voxel Grid)"
             if not (hashHasKey surfaceVoxels key) and not (hashHasKey exteriorVoxels key) then
             (
                 setHashTrue exteriorVoxels key
-                queue.Enqueue #(x + 1, y, z)
-                queue.Enqueue #(x - 1, y, z)
-                queue.Enqueue #(x, y + 1, z)
-                queue.Enqueue #(x, y - 1, z)
-                queue.Enqueue #(x, y, z + 1)
-                queue.Enqueue #(x, y, z - 1)
+                enqueueFloodNeighbor queue queuedVoxels surfaceVoxels exteriorVoxels counts (x + 1) y z
+                enqueueFloodNeighbor queue queuedVoxels surfaceVoxels exteriorVoxels counts (x - 1) y z
+                enqueueFloodNeighbor queue queuedVoxels surfaceVoxels exteriorVoxels counts x (y + 1) z
+                enqueueFloodNeighbor queue queuedVoxels surfaceVoxels exteriorVoxels counts x (y - 1) z
+                enqueueFloodNeighbor queue queuedVoxels surfaceVoxels exteriorVoxels counts x y (z + 1)
+                enqueueFloodNeighbor queue queuedVoxels surfaceVoxels exteriorVoxels counts x y (z - 1)
+
+                processed += 1
             )
 
-            processed += 1
-            if (mod processed 250) == 0 do updateProgress processed totalSamples createdCount
+            if (mod processed 250) == 0 do
+            (
+                debugLog ("Flood fill progress: exterior=" + exteriorVoxels.Count as string + " queue=" + queue.Count as string + " processed=" + processed as string)
+                updateProgress processed totalSamples createdCount
+            )
         )
+
+        debugLog ("Flood fill end: exterior voxels=" + exteriorVoxels.Count as string + " processed=" + processed as string + " remaining queue=" + queue.Count as string)
 
         #(exteriorVoxels, processed)
     )
@@ -269,6 +293,8 @@ rollout voxelFillGridUI "Temple Voxel Fill Tool (Voxel Grid)"
     (
         local interiorVoxels = dotNetObject "System.Collections.Hashtable"
         local processed = processedCount
+
+        debugLog ("Interior build start: grid counts=" + counts as string)
 
         for x = 0 to (counts[1] - 1) while not fillCancelled do
         (
@@ -283,7 +309,10 @@ rollout voxelFillGridUI "Temple Voxel Fill Tool (Voxel Grid)"
             )
 
             updateProgress processed totalSamples createdCount
+            if (mod x 10) == 0 do debugLog ("Interior build progress: x=" + x as string + " interior=" + interiorVoxels.Count as string + " processed=" + processed as string)
         )
+
+        debugLog ("Interior build end: interior voxels=" + interiorVoxels.Count as string + " processed=" + processed as string)
 
         #(interiorVoxels, processed)
     )
@@ -453,6 +482,8 @@ rollout voxelFillGridUI "Temple Voxel Fill Tool (Voxel Grid)"
         local processed = processedCount
         local created = 0
 
+        debugLog ("Placement phase start: interior voxels=" + interiorVoxels.Count as string + " counts=" + counts as string)
+
         for fillJob in fillJobs while not fillCancelled do
         (
             local brickObj = fillJob[1]
@@ -483,11 +514,17 @@ rollout voxelFillGridUI "Temple Voxel Fill Tool (Voxel Grid)"
                         )
 
                         processed += 1
-                        if (mod processed 100) == 0 or processed == totalSamples do updateProgress processed totalSamples created
+                        if (mod processed 100) == 0 or processed == totalSamples do
+                        (
+                            updateProgress processed totalSamples created
+                            if (mod processed 1000) == 0 do debugLog ("Placement progress: brick=" + brickObj.name + " created=" + created as string + " occupied=" + occupiedVoxels.Count as string + " processed=" + processed as string)
+                        )
                     )
                 )
             )
         )
+
+        debugLog ("Placement phase end: created=" + created as string + " occupied voxels=" + occupiedVoxels.Count as string + " processed=" + processed as string)
 
         #(created, processed)
     )
@@ -550,10 +587,12 @@ rollout voxelFillGridUI "Temple Voxel Fill Tool (Voxel Grid)"
                 debugLog "----- Voxel Fill Start -----"
                 debugLog ("Temple bounds min=" + templeBounds[1] as string + " max=" + templeBounds[2] as string)
                 debugLog ("Grid min=" + gridMin as string + " max=" + gridMax as string + " counts=" + counts as string + " cellSize=" + cellSize as string)
+                debugLog ("Estimated steps=" + totalSamples as string + " placement checks=" + estimatedPlacementChecks as string)
 
                 local surfaceBuildResult = buildSurfaceVoxels snapshotNode gridMin cellSize counts paddingCells totalSamples created
                 local surfaceVoxels = surfaceBuildResult[1]
                 processed = surfaceBuildResult[2]
+                debugLog ("Surface raster end: voxels=" + surfaceVoxels.Count as string + " processed=" + processed as string)
 
                 local exteriorResult = floodFillExterior surfaceVoxels counts totalSamples processed created
                 local exteriorVoxels = exteriorResult[1]
