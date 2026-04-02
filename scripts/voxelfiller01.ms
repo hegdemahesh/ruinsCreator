@@ -35,7 +35,7 @@ rollout voxelFillUI "Temple Voxel Fill Tool"
     fn getAxisSampleCount minValue maxValue stepSize =
     (
         local axisLength = amax 0.0 ((maxValue - minValue) as float)
-        amax 1 (ceiling (axisLength / stepSize))
+        amax 1 (ceil (axisLength / stepSize))
     )
 
     fn getAxisSamplePosition sampleIndex minValue maxValue stepSize sampleCount =
