@@ -4,6 +4,9 @@ rollout voxelFillUI "Temple Voxel Fill Tool"
     local bigBrick
     local mediumBrick
     local fillCancelled = false
+    local debugInsideLogCount = 0
+    local debugOutsideLogCount = 0
+    local debugHelperCount = 0
 
     button pickTemple "Pick Temple Mesh"
     button pickBigBrick "Pick Big Brick Mesh"
@@ -17,9 +20,48 @@ rollout voxelFillUI "Temple Voxel Fill Tool"
     spinner scaleMaxSpinner "Max Scale" range:[10,110,300] type:#integer fieldwidth:48
     checkbox materialVariationCheck "Material Tint Variation" checked:false
     spinner materialTintSpinner "Tint %" range:[0,8,100] type:#integer fieldwidth:48
+    groupBox debugGroup "Debug" width:188 height:72
+    checkbox debugCheck "Log Debug Info + Markers" checked:true
+    spinner debugSampleSpinner "Samples Per State" range:[1,3,50] type:#integer fieldwidth:48
     button runFill "Run Voxel Fill"
     progressBar fillProgress "" color:(color 70 150 90)
     label fillStatus "Idle"
+
+    fn debugLog messageText =
+    (
+        if debugCheck.checked do
+        (
+            format "[VoxelFill] %\n" messageText
+        )
+    )
+
+    fn resetDebugState =
+    (
+        debugInsideLogCount = 0
+        debugOutsideLogCount = 0
+        debugHelperCount = 0
+    )
+
+    fn clearDebugHelpers =
+    (
+        for obj in objects where matchPattern obj.name pattern:"VoxelDebug_*" do delete obj
+    )
+
+    fn createDebugPointHelper p isInside =
+    (
+        if debugCheck.checked do
+        (
+            local debugLimit = amax 1 debugSampleSpinner.value
+            if debugHelperCount < (debugLimit * 2) then
+            (
+                debugHelperCount += 1
+                local markerSuffix = if isInside then "_Inside" else "_Outside"
+                local markerName = "VoxelDebug_" + (debugHelperCount as string) + markerSuffix
+                local marker = point name:markerName pos:p size:8 cross:true box:true
+                marker.wirecolor = if isInside then (color 30 200 90) else (color 220 70 70)
+            )
+        )
+    )
 
     fn getBrickSize brickObj =
     (
@@ -82,7 +124,7 @@ rollout voxelFillUI "Temple Voxel Fill Tool"
         hitCount
     )
 
-    fn pointInMesh p obj =
+    fn evaluatePointInMesh p obj =
     (
         local directions = #(
             normalize [1.0, 0.371, 0.173],
@@ -91,6 +133,7 @@ rollout voxelFillUI "Temple Voxel Fill Tool"
             normalize [1.0, 1.0, 0.411],
             normalize [-0.707, 0.223, 1.0]
         )
+        local hitCounts = #()
         local insideVotes = 0
         local voteThreshold = amax 1 (ceil (directions.count as float * 0.5))
         local surfaceBias = 0.1
@@ -98,10 +141,16 @@ rollout voxelFillUI "Temple Voxel Fill Tool"
         for dir in directions do
         (
             local hitCount = countRayHits obj (p - (dir * surfaceBias)) dir
+            append hitCounts hitCount
             if (mod hitCount 2) == 1 do insideVotes += 1
         )
 
-        insideVotes >= voteThreshold
+        #((insideVotes >= voteThreshold), insideVotes, voteThreshold, hitCounts)
+    )
+
+    fn pointInMesh p obj =
+    (
+        (evaluatePointInMesh p obj)[1]
     )
 
     fn clampColorChannel value =
@@ -186,6 +235,9 @@ rollout voxelFillUI "Temple Voxel Fill Tool"
         local created = createdCount
         local updateInterval = amax 1 ((totalSamples / 150) as integer)
 
+        debugLog ("Fill job start: brick=" + brickObj.name + " voxelSize=" + voxelSize as string + " boundsMin=" + bbMin as string + " boundsMax=" + bbMax as string)
+        debugLog ("Grid counts: x=" + xCount as string + " y=" + yCount as string + " z=" + zCount as string + " updateInterval=" + updateInterval as string)
+
         for xIndex = 0 to (xCount - 1) while not fillCancelled do
         (
             local x = getAxisSamplePosition xIndex bbMin.x bbMax.x stepX xCount
@@ -199,7 +251,27 @@ rollout voxelFillUI "Temple Voxel Fill Tool"
                     local z = getAxisSamplePosition zIndex bbMin.z bbMax.z stepZ zCount
                     processed += 1
                     local p = [x,y,z]
-                    if pointInMesh p temple then
+                    local pointResult = evaluatePointInMesh p temple
+                    local isInside = pointResult[1]
+
+                    if debugCheck.checked do
+                    (
+                        local debugLimit = amax 1 debugSampleSpinner.value
+                        if isInside and debugInsideLogCount < debugLimit then
+                        (
+                            debugInsideLogCount += 1
+                            debugLog ("INSIDE sample " + processed as string + " point=" + p as string + " hits=" + pointResult[4] as string + " votes=" + pointResult[2] as string + "/" + pointResult[3] as string)
+                            createDebugPointHelper p true
+                        )
+                        else if (not isInside) and debugOutsideLogCount < debugLimit then
+                        (
+                            debugOutsideLogCount += 1
+                            debugLog ("OUTSIDE sample " + processed as string + " point=" + p as string + " hits=" + pointResult[4] as string + " votes=" + pointResult[2] as string + "/" + pointResult[3] as string)
+                            createDebugPointHelper p false
+                        )
+                    )
+
+                    if isInside then
                     (
                         local newBrick = instance brickObj
                         newBrick.position = p
@@ -214,6 +286,8 @@ rollout voxelFillUI "Temple Voxel Fill Tool"
                 )
             )
         )
+
+        debugLog ("Fill job end: brick=" + brickObj.name + " processed=" + processed as string + " created=" + created as string)
 
         #(processed, created)
     )
@@ -233,9 +307,23 @@ rollout voxelFillUI "Temple Voxel Fill Tool"
         fillStatus.text = messageText
     )
 
-    on pickTemple pressed do templeMesh = pickObject()
-    on pickBigBrick pressed do bigBrick = pickObject()
-    on pickMediumBrick pressed do mediumBrick = pickObject()
+    on pickTemple pressed do
+    (
+        templeMesh = pickObject()
+        if templeMesh != undefined do debugLog ("Picked temple: " + templeMesh.name)
+    )
+
+    on pickBigBrick pressed do
+    (
+        bigBrick = pickObject()
+        if bigBrick != undefined do debugLog ("Picked big brick: " + bigBrick.name + " size=" + (getBrickSize bigBrick) as string)
+    )
+
+    on pickMediumBrick pressed do
+    (
+        mediumBrick = pickObject()
+        if mediumBrick != undefined do debugLog ("Picked medium brick: " + mediumBrick.name + " size=" + (getBrickSize mediumBrick) as string)
+    )
 
     on runFill pressed do
     (
@@ -243,11 +331,26 @@ rollout voxelFillUI "Temple Voxel Fill Tool"
 
         if templeMesh != undefined and fillJobs.count > 0 then
         (
+            local templeBounds = getTempleBounds templeMesh
             local totalSamples = 0
             local processed = 0
             local created = 0
 
-            for fillJob in fillJobs do totalSamples += estimateSampleCount templeMesh fillJob[2]
+            resetDebugState()
+            if debugCheck.checked do clearDebugHelpers()
+
+            debugLog "----- Fill Run Start -----"
+            debugLog ("Temple: " + templeMesh.name)
+            debugLog ("Temple bounds min=" + templeBounds[1] as string + " max=" + templeBounds[2] as string)
+
+            for fillJob in fillJobs do
+            (
+                local estimatedSamples = estimateSampleCount templeMesh fillJob[2]
+                totalSamples += estimatedSamples
+                debugLog ("Job setup: brick=" + fillJob[1].name + " voxelSize=" + fillJob[2] as string + " estimatedSamples=" + estimatedSamples as string)
+            )
+
+            debugLog ("Total estimated samples=" + totalSamples as string)
 
             fillCancelled = false
             runFill.enabled = false
@@ -262,6 +365,9 @@ rollout voxelFillUI "Temple Voxel Fill Tool"
 
             updateProgress processed totalSamples created
             fillStatus.text = ("Fill complete. Created " + created as string + " bricks.")
+            debugLog ("Fill complete. Processed=" + processed as string + " created=" + created as string)
+            if created == 0 do debugLog "No bricks were created. Check the OUTSIDE sample logs and helper markers."
+            debugLog "----- Fill Run End -----"
             runFill.enabled = true
         )
         else
@@ -272,4 +378,4 @@ rollout voxelFillUI "Temple Voxel Fill Tool"
     )
 )
 
-createDialog voxelFillUI width:280 height:440
+createDialog voxelFillUI width:280 height:520
