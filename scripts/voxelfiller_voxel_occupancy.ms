@@ -1,13 +1,11 @@
 rollout voxelFillGridUI "Temple Voxel Fill Tool (Voxel Grid)"
 (
     local templeMesh
-    local boundaryMesh
     local bigBrick
     local mediumBrick
     local fillCancelled = false
 
     button pickTemple "Pick Temple Mesh"
-    button pickBoundary "Pick Boundary Mesh (Optional)"
     button pickBigBrick "Pick Big Brick Mesh"
     button pickMediumBrick "Pick Medium Brick Mesh"
 
@@ -73,11 +71,12 @@ rollout voxelFillGridUI "Temple Voxel Fill Tool (Voxel Grid)"
         bounds[2] - bounds[1]
     )
 
-    fn validateGridSettings bounds counts paddingCells cellSize =
+    fn validateGridSettings bounds counts paddingCells cellSize estimatedPlacementChecks =
     (
         local boundsSize = getBoundsSize bounds
         local minAxisCount = amin counts[1] (amin counts[2] counts[3])
         local effectiveInteriorAxis = minAxisCount - (paddingCells * 2)
+        local totalGridCells = counts[1] * counts[2] * counts[3]
 
         if minAxisCount <= 3 then
         (
@@ -98,6 +97,22 @@ rollout voxelFillGridUI "Temple Voxel Fill Tool (Voxel Grid)"
         if cellSize >= (amax boundsSize.x (amax boundsSize.y boundsSize.z)) then
         (
             local warningMessage = "Cell Size is larger than the mesh dimensions. Use a much smaller Cell Size."
+            debugLog warningMessage
+            messageBox warningMessage title:"Voxel Fill"
+            return false
+        )
+
+        if totalGridCells > 250000 then
+        (
+            local warningMessage = "Voxel grid is too dense for interactive use. Grid cells=" + totalGridCells as string + ". Increase Cell Size before running."
+            debugLog warningMessage
+            messageBox warningMessage title:"Voxel Fill"
+            return false
+        )
+
+        if estimatedPlacementChecks > 2000000 then
+        (
+            local warningMessage = "Placement scan is too expensive. Estimated placement checks=" + estimatedPlacementChecks as string + ". Increase Cell Size or use larger bricks."
             debugLog warningMessage
             messageBox warningMessage title:"Voxel Fill"
             return false
@@ -585,19 +600,6 @@ rollout voxelFillGridUI "Temple Voxel Fill Tool (Voxel Grid)"
         if templeMesh != undefined do debugLog ("Picked temple: " + templeMesh.name)
     )
 
-    on pickBoundary pressed do
-    (
-        boundaryMesh = pickObject()
-        if boundaryMesh != undefined then
-        (
-            debugLog ("Picked boundary mesh: " + boundaryMesh.name)
-        )
-        else
-        (
-            debugLog "Boundary mesh cleared or not picked."
-        )
-    )
-
     on pickBigBrick pressed do
     (
         bigBrick = pickObject()
@@ -616,10 +618,9 @@ rollout voxelFillGridUI "Temple Voxel Fill Tool (Voxel Grid)"
 
         if templeMesh != undefined and fillJobs.count > 0 then
         (
-            local voxelSourceMesh = if boundaryMesh != undefined then boundaryMesh else templeMesh
             local cellSize = amax 0.1 cellSizeSpinner.value
             local paddingCells = amax 0 shellPaddingSpinner.value
-            local gridInfo = buildGridInfo voxelSourceMesh cellSize
+            local gridInfo = buildGridInfo templeMesh cellSize
             local templeBounds = gridInfo[1]
             local gridMin = gridInfo[2]
             local gridMax = gridInfo[3]
@@ -627,9 +628,9 @@ rollout voxelFillGridUI "Temple Voxel Fill Tool (Voxel Grid)"
             local estimatedPlacementChecks = estimatePlacementChecks counts fillJobs cellSize
             local processed = 0
             local created = 0
-            local snapshotNode = createTempleSnapshot voxelSourceMesh
+            local snapshotNode = createTempleSnapshot templeMesh
 
-            if not (validateGridSettings templeBounds counts paddingCells cellSize) then
+            if not (validateGridSettings templeBounds counts paddingCells cellSize estimatedPlacementChecks) then
             (
                 resetProgressState "Idle"
                 if snapshotNode != undefined do deleteSnapshot snapshotNode
@@ -650,7 +651,6 @@ rollout voxelFillGridUI "Temple Voxel Fill Tool (Voxel Grid)"
                 resetProgressState "Voxelizing temple..."
 
                 debugLog "----- Voxel Fill Start -----"
-                debugLog ("Voxel source mesh=" + voxelSourceMesh.name)
                 debugLog ("Temple bounds min=" + templeBounds[1] as string + " max=" + templeBounds[2] as string)
                 debugLog ("Grid min=" + gridMin as string + " max=" + gridMax as string + " counts=" + counts as string + " cellSize=" + cellSize as string)
                 debugLog ("Estimated steps=" + totalSamples as string + " placement checks=" + estimatedPlacementChecks as string)
