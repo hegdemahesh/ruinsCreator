@@ -100,9 +100,9 @@ rollout voxelFillGridUI "Temple Voxel Fill Tool (Voxel Grid)"
         local gridMin = bounds[1] - [cellSize, cellSize, cellSize]
         local gridMax = bounds[2] + [cellSize, cellSize, cellSize]
         local counts = #(
-            amax 1 (ceil ((gridMax.x - gridMin.x) / cellSize)),
-            amax 1 (ceil ((gridMax.y - gridMin.y) / cellSize)),
-            amax 1 (ceil ((gridMax.z - gridMin.z) / cellSize))
+            (amax 1 (ceil ((gridMax.x - gridMin.x) / cellSize))) as integer,
+            (amax 1 (ceil ((gridMax.y - gridMin.y) / cellSize))) as integer,
+            (amax 1 (ceil ((gridMax.z - gridMin.z) / cellSize))) as integer
         )
 
         #(bounds, gridMin, gridMax, counts)
@@ -200,10 +200,15 @@ rollout voxelFillGridUI "Temple Voxel Fill Tool (Voxel Grid)"
         #(surfaceVoxels, processed)
     )
 
-    fn enqueueBoundaryCell queue surfaceVoxels counts x y z =
+    fn enqueueBoundaryCell queue queuedVoxels surfaceVoxels counts x y z =
     (
         local key = makeVoxelKey x y z
-        if isCellInBounds x y z counts and not (hashHasKey surfaceVoxels key) do queue.Enqueue #(x, y, z)
+
+        if isCellInBounds x y z counts and not (hashHasKey queuedVoxels key) and not (hashHasKey surfaceVoxels key) then
+        (
+            setHashTrue queuedVoxels key
+            queue.Enqueue #(x, y, z)
+        )
     )
 
     fn enqueueFloodNeighbor queue queuedVoxels surfaceVoxels exteriorVoxels counts x y z =
@@ -229,8 +234,8 @@ rollout voxelFillGridUI "Temple Voxel Fill Tool (Voxel Grid)"
         (
             for y = 0 to (counts[2] - 1) do
             (
-                enqueueBoundaryCell queue surfaceVoxels counts x y 0
-                enqueueBoundaryCell queue surfaceVoxels counts x y (counts[3] - 1)
+                enqueueBoundaryCell queue queuedVoxels surfaceVoxels counts x y 0
+                enqueueBoundaryCell queue queuedVoxels surfaceVoxels counts x y (counts[3] - 1)
             )
         )
 
@@ -238,8 +243,8 @@ rollout voxelFillGridUI "Temple Voxel Fill Tool (Voxel Grid)"
         (
             for z = 0 to (counts[3] - 1) do
             (
-                enqueueBoundaryCell queue surfaceVoxels counts x 0 z
-                enqueueBoundaryCell queue surfaceVoxels counts x (counts[2] - 1) z
+                enqueueBoundaryCell queue queuedVoxels surfaceVoxels counts x 0 z
+                enqueueBoundaryCell queue queuedVoxels surfaceVoxels counts x (counts[2] - 1) z
             )
         )
 
@@ -247,12 +252,11 @@ rollout voxelFillGridUI "Temple Voxel Fill Tool (Voxel Grid)"
         (
             for z = 0 to (counts[3] - 1) do
             (
-                enqueueBoundaryCell queue surfaceVoxels counts 0 y z
-                enqueueBoundaryCell queue surfaceVoxels counts (counts[1] - 1) y z
+                enqueueBoundaryCell queue queuedVoxels surfaceVoxels counts 0 y z
+                enqueueBoundaryCell queue queuedVoxels surfaceVoxels counts (counts[1] - 1) y z
             )
         )
 
-        for queuedCell in queue do setHashTrue queuedVoxels (makeVoxelKey queuedCell[1] queuedCell[2] queuedCell[3])
         seedCount = queue.Count
         debugLog ("Flood fill start: boundary seeds=" + seedCount as string + " surface voxels=" + surfaceVoxels.Count as string)
 
