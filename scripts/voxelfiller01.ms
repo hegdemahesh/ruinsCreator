@@ -63,6 +63,34 @@ rollout voxelFillUI "Temple Voxel Fill Tool"
         )
     )
 
+    fn createRaycastTarget temple =
+    (
+        local snapshotNode = undefined
+
+        try
+        (
+            snapshotNode = snapshot temple
+            if snapshotNode != undefined do
+            (
+                snapshotNode.name = uniqueName "VoxelRaycastTarget"
+                snapshotNode.isHidden = true
+                snapshotNode.boxMode = true
+                debugLog ("Created raycast snapshot: " + snapshotNode.name + " class=" + (classOf snapshotNode) as string)
+            )
+        )
+        catch
+        (
+            snapshotNode = undefined
+        )
+
+        snapshotNode
+    )
+
+    fn deleteRaycastTarget raycastTarget =
+    (
+        if isValidNode raycastTarget do delete raycastTarget
+    )
+
     fn getBrickSize brickObj =
     (
         local bb = nodeGetBoundingBox brickObj brickObj.transform
@@ -220,7 +248,7 @@ rollout voxelFillUI "Temple Voxel Fill Tool"
         windows.processPostedMessages()
     )
 
-    fn fillMeshWithBricks temple brickObj voxelSize totalSamples processedCount createdCount =
+    fn fillMeshWithBricks temple raycastTarget brickObj voxelSize totalSamples processedCount createdCount =
     (
         local bounds = getTempleBounds temple
         local bbMin = bounds[1]
@@ -251,7 +279,7 @@ rollout voxelFillUI "Temple Voxel Fill Tool"
                     local z = getAxisSamplePosition zIndex bbMin.z bbMax.z stepZ zCount
                     processed += 1
                     local p = [x,y,z]
-                    local pointResult = evaluatePointInMesh p temple
+                    local pointResult = evaluatePointInMesh p raycastTarget
                     local isInside = pointResult[1]
 
                     if debugCheck.checked do
@@ -332,6 +360,7 @@ rollout voxelFillUI "Temple Voxel Fill Tool"
         if templeMesh != undefined and fillJobs.count > 0 then
         (
             local templeBounds = getTempleBounds templeMesh
+            local raycastTarget = createRaycastTarget templeMesh
             local totalSamples = 0
             local processed = 0
             local created = 0
@@ -342,6 +371,7 @@ rollout voxelFillUI "Temple Voxel Fill Tool"
             debugLog "----- Fill Run Start -----"
             debugLog ("Temple: " + templeMesh.name)
             debugLog ("Temple bounds min=" + templeBounds[1] as string + " max=" + templeBounds[2] as string)
+            if raycastTarget == undefined then debugLog "Raycast snapshot creation failed. Falling back to temple node."
 
             for fillJob in fillJobs do
             (
@@ -358,7 +388,8 @@ rollout voxelFillUI "Temple Voxel Fill Tool"
 
             for fillJob in fillJobs while not fillCancelled do
             (
-                local fillResult = fillMeshWithBricks templeMesh fillJob[1] fillJob[2] totalSamples processed created
+                local activeRaycastTarget = if raycastTarget != undefined then raycastTarget else templeMesh
+                local fillResult = fillMeshWithBricks templeMesh activeRaycastTarget fillJob[1] fillJob[2] totalSamples processed created
                 processed = fillResult[1]
                 created = fillResult[2]
             )
@@ -368,6 +399,7 @@ rollout voxelFillUI "Temple Voxel Fill Tool"
             debugLog ("Fill complete. Processed=" + processed as string + " created=" + created as string)
             if created == 0 do debugLog "No bricks were created. Check the OUTSIDE sample logs and helper markers."
             debugLog "----- Fill Run End -----"
+            deleteRaycastTarget raycastTarget
             runFill.enabled = true
         )
         else
