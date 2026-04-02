@@ -84,17 +84,24 @@ rollout voxelFillUI "Temple Voxel Fill Tool"
 
     fn pointInMesh p obj =
     (
-        local directions = #([1,0,0], [0,1,0], [0,0,1])
+        local directions = #(
+            normalize [1.0, 0.371, 0.173],
+            normalize [-0.529, 1.0, 0.241],
+            normalize [0.193, -0.317, 1.0],
+            normalize [1.0, 1.0, 0.411],
+            normalize [-0.707, 0.223, 1.0]
+        )
         local insideVotes = 0
-        local surfaceBias = 0.25
+        local voteThreshold = amax 1 (ceil (directions.count as float * 0.5))
+        local surfaceBias = 0.1
 
         for dir in directions do
         (
-            local hitCount = countRayHits obj (p - (normalize dir * surfaceBias)) dir
+            local hitCount = countRayHits obj (p - (dir * surfaceBias)) dir
             if (mod hitCount 2) == 1 do insideVotes += 1
         )
 
-        insideVotes >= 2
+        insideVotes >= voteThreshold
     )
 
     fn clampColorChannel value =
