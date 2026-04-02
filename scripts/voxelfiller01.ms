@@ -152,7 +152,31 @@ rollout voxelFillUI "Temple Voxel Fill Tool"
         hitCount
     )
 
-    fn evaluatePointInMesh p obj =
+    fn countRayHitsToDistance obj rayOrigin rayDir maxDistance maxHits:128 epsilon:0.5 =
+    (
+        local hitCount = 0
+        local normalizedDir = normalize rayDir
+        local sampleOrigin = rayOrigin
+        local travelledDistance = 0.0
+        local hit = intersectRay obj (ray sampleOrigin normalizedDir)
+
+        while hit != undefined and hitCount < maxHits do
+        (
+            local hitDistance = distance sampleOrigin hit.pos
+            travelledDistance += hitDistance
+
+            if travelledDistance > (maxDistance + epsilon) then exit
+
+            hitCount += 1
+            sampleOrigin = hit.pos + (normalizedDir * epsilon)
+            travelledDistance += epsilon
+            hit = intersectRay obj (ray sampleOrigin normalizedDir)
+        )
+
+        hitCount
+    )
+
+    fn evaluatePointInMesh p obj bounds =
     (
         local directions = #(
             normalize [1.0, 0.371, 0.173],
@@ -164,11 +188,16 @@ rollout voxelFillUI "Temple Voxel Fill Tool"
         local hitCounts = #()
         local insideVotes = 0
         local voteThreshold = amax 1 (ceil (directions.count as float * 0.5))
-        local surfaceBias = 0.1
+        local bbMin = bounds[1]
+        local bbMax = bounds[2]
+        local boundsSize = bbMax - bbMin
+        local padding = (amax boundsSize.x (amax boundsSize.y boundsSize.z)) + 10.0
 
         for dir in directions do
         (
-            local hitCount = countRayHits obj (p - (dir * surfaceBias)) dir
+            local rayOrigin = p - (dir * padding)
+            local maxDistance = distance rayOrigin p
+            local hitCount = countRayHitsToDistance obj rayOrigin dir maxDistance
             append hitCounts hitCount
             if (mod hitCount 2) == 1 do insideVotes += 1
         )
@@ -178,7 +207,7 @@ rollout voxelFillUI "Temple Voxel Fill Tool"
 
     fn pointInMesh p obj =
     (
-        (evaluatePointInMesh p obj)[1]
+        (evaluatePointInMesh p obj (getTempleBounds obj))[1]
     )
 
     fn clampColorChannel value =
@@ -279,7 +308,7 @@ rollout voxelFillUI "Temple Voxel Fill Tool"
                     local z = getAxisSamplePosition zIndex bbMin.z bbMax.z stepZ zCount
                     processed += 1
                     local p = [x,y,z]
-                    local pointResult = evaluatePointInMesh p raycastTarget
+                    local pointResult = evaluatePointInMesh p raycastTarget bounds
                     local isInside = pointResult[1]
 
                     if debugCheck.checked do
