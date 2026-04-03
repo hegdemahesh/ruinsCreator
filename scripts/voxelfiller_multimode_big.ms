@@ -10,12 +10,12 @@ rollout voxelFillMultiModeUI "Temple Fill Tool (Voxel Or Slice)"
     button pickTemple "Pick Temple Mesh"
     button pickBigBrick "Pick Big Brick Mesh"
 
-    groupBox modeGroup "Placement Mode" width:250 height:72
-    dropdownList modeDropdown "Mode" items:#("Voxel Occupancy","Slice Fill") selection:1 width:140
+    groupBox modeGroup "Placement Mode" width:320 height:96
+    dropdownList modeDropdown "Mode" items:#("Voxel Occupancy","Slice Fill") selection:1 width:190
     spinner cellSizeSpinner "Cell Size" range:[0.1,1.0,1000.0] type:#float fieldwidth:64 scale:0.1
     spinner paddingCellsSpinner "Padding Cells" range:[0,0,4] type:#integer fieldwidth:64
 
-    groupBox debugGroup "Debug" width:250 height:72
+    groupBox debugGroup "Debug" width:320 height:88
     checkbox debugCheck "Listener Debug" checked:true
     checkbox debugSamplesCheck "Log Placement Samples" checked:false
 
@@ -669,4 +669,4 @@ rollout voxelFillMultiModeUI "Temple Fill Tool (Voxel Or Slice)"
     )
 )
 
-createDialog voxelFillMultiModeUI width:420 height:340
+createDialog voxelFillMultiModeUI width:520 height:460
