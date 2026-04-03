@@ -336,7 +336,7 @@ rollout voxelFillRaytraceUI "Temple Voxel Fill Tool (Raytrace Refined)"
 
                             processed += 1
 
-                            if not (hashHasKey mediumOccupied mediumKey) then
+                            if not (mediumOccupied.ContainsKey mediumKey) then
                             (
                                 mediumClassification = classifyRegion mediumRegionMin mediumRegionMax raycastTarget templeBounds
 
@@ -347,7 +347,7 @@ rollout voxelFillRaytraceUI "Temple Voxel Fill Tool (Raytrace Refined)"
                                     local newMediumBrick = instance mediumBrick
                                     newMediumBrick.position = mediumCenter
                                     applyPlacement newMediumBrick mediumBrick
-                                    setHashTrue mediumOccupied mediumKey
+                                    mediumOccupied.Add mediumKey true
                                     created += 1
                                     mediumCreated += 1
                                 )
