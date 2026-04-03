@@ -225,10 +225,11 @@ rollout voxelFillRaytraceUI "Temple Voxel Fill Tool (Raytrace Refined)"
 
     fn makeMediumKey position templeMin mediumSize =
     (
-        makeGridKey \
-            ((floor ((position.x - templeMin.x) / mediumSize.x)) as integer) \
-            ((floor ((position.y - templeMin.y) / mediumSize.y)) as integer) \
-            ((floor ((position.z - templeMin.z) / mediumSize.z)) as integer)
+        local cellX = (floor ((position.x - templeMin.x) / mediumSize.x)) as integer
+        local cellY = (floor ((position.y - templeMin.y) / mediumSize.y)) as integer
+        local cellZ = (floor ((position.z - templeMin.z) / mediumSize.z)) as integer
+
+        (cellX as string) + "|" + (cellY as string) + "|" + (cellZ as string)
     )
 
     fn estimateTotalSteps templeBounds bigSize mediumSize useMedium =
