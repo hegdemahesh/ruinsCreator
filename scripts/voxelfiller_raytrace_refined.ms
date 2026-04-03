@@ -6,6 +6,9 @@ rollout voxelFillRaytraceUI "Temple Voxel Fill Tool (Raytrace Refined)"
     local bigBrick
     local mediumBrick
     local fillCancelled = false
+    local placementDebugLogsRemaining = 0
+    local overlapDebugLogsRemaining = 0
+    local overlapTolerance = 0.001
 
     button pickTemple "Pick Temple Mesh"
     button pickBigBrick "Pick Big Brick Mesh"
@@ -29,10 +32,55 @@ rollout voxelFillRaytraceUI "Temple Voxel Fill Tool (Raytrace Refined)"
         if debugCheck.checked do format "[VoxelFillRay] %\n" messageText
     )
 
+    fn debugBounds prefix boundsValue =
+    (
+        debugLog (prefix + " min=" + boundsValue[1] as string + " max=" + boundsValue[2] as string)
+    )
+
     fn getBrickSize brickObj =
     (
-        local bb = nodeGetBoundingBox brickObj brickObj.transform
+        local bb = nodeGetBoundingBox brickObj (matrix3 1)
         bb[2] - bb[1]
+    )
+
+    fn getBrickCenterOffset brickObj =
+    (
+        local bb = nodeGetBoundingBox brickObj (matrix3 1)
+        ((bb[1] + bb[2]) * 0.5) - brickObj.position
+    )
+
+    fn getPlacementBounds sourceBrick targetCenter =
+    (
+        local brickSize = getBrickSize sourceBrick
+        local halfSize = brickSize * 0.5
+        #(targetCenter - halfSize, targetCenter + halfSize)
+    )
+
+    fn boundsOverlap boundsA boundsB =
+    (
+        boundsA[1].x < (boundsB[2].x - overlapTolerance) and boundsA[2].x > (boundsB[1].x + overlapTolerance) and \
+        boundsA[1].y < (boundsB[2].y - overlapTolerance) and boundsA[2].y > (boundsB[1].y + overlapTolerance) and \
+        boundsA[1].z < (boundsB[2].z - overlapTolerance) and boundsA[2].z > (boundsB[1].z + overlapTolerance)
+    )
+
+    fn placementOverlaps targetBounds placedBounds =
+    (
+        for placedBoundsEntry in placedBounds do
+        (
+            if boundsOverlap targetBounds placedBoundsEntry do
+            (
+                if overlapDebugLogsRemaining > 0 then
+                (
+                    debugBounds "Overlap candidate" targetBounds
+                    debugBounds "Overlap existing" placedBoundsEntry
+                    overlapDebugLogsRemaining -= 1
+                )
+
+                return true
+            )
+        )
+
+        false
     )
 
     fn getTempleBounds temple =
@@ -198,10 +246,14 @@ rollout voxelFillRaytraceUI "Temple Voxel Fill Tool (Raytrace Refined)"
         true
     )
 
-    fn applyPlacement newBrick sourceBrick =
+    fn applyPlacement newBrick sourceBrick targetCenter =
     (
+        local centerOffset = getBrickCenterOffset sourceBrick
+        local sourceBounds = nodeGetBoundingBox sourceBrick (matrix3 1)
+
         newBrick.rotation = sourceBrick.rotation
         newBrick.scale = sourceBrick.scale
+        newBrick.position = targetCenter - centerOffset
 
         if materialVariationCheck.checked then
         (
@@ -210,6 +262,19 @@ rollout voxelFillRaytraceUI "Temple Voxel Fill Tool (Raytrace Refined)"
         else
         (
             newBrick.material = sourceBrick.material
+        )
+
+        if placementDebugLogsRemaining > 0 then
+        (
+            local newBounds = nodeGetBoundingBox newBrick (matrix3 1)
+            local newBoundsCenter = (newBounds[1] + newBounds[2]) * 0.5
+
+            debugLog ("Placement source=" + sourceBrick.name + " sourcePos=" + sourceBrick.position as string + " targetCenter=" + targetCenter as string + " centerOffset=" + centerOffset as string + " finalPos=" + newBrick.position as string)
+            debugBounds "Placement sourceBounds" sourceBounds
+            debugBounds "Placement newBounds" newBounds
+            debugLog ("Placement newBoundsCenter=" + newBoundsCenter as string + " centerDelta=" + (newBoundsCenter - targetCenter) as string)
+
+            placementDebugLogsRemaining -= 1
         )
     )
 
@@ -249,6 +314,7 @@ rollout voxelFillRaytraceUI "Temple Voxel Fill Tool (Raytrace Refined)"
     (
         local boundaryRegions = #()
         local mediumOccupied = dotNetObject "System.Collections.Hashtable"
+        local placedBounds = #()
         local created = 0
         local processed = 0
         local bigCreated = 0
@@ -256,6 +322,9 @@ rollout voxelFillRaytraceUI "Temple Voxel Fill Tool (Raytrace Refined)"
         local bigCountX = getAxisSampleCount templeBounds[1].x templeBounds[2].x bigSize.x
         local bigCountY = getAxisSampleCount templeBounds[1].y templeBounds[2].y bigSize.y
         local bigCountZ = getAxisSampleCount templeBounds[1].z templeBounds[2].z bigSize.z
+
+        placementDebugLogsRemaining = 12
+        overlapDebugLogsRemaining = 8
 
         debugLog ("Large pass start: counts=" + #(bigCountX, bigCountY, bigCountZ) as string + " bigSize=" + bigSize as string)
 
@@ -283,11 +352,17 @@ rollout voxelFillRaytraceUI "Temple Voxel Fill Tool (Raytrace Refined)"
                     (
                         #inside:
                         (
-                            local newBrick = instance bigBrick
-                            newBrick.position = regionCenter
-                            applyPlacement newBrick bigBrick
-                            created += 1
-                            bigCreated += 1
+                            local targetBounds = getPlacementBounds bigBrick regionCenter
+
+                            if not (placementOverlaps targetBounds placedBounds) then
+                            (
+                                local newBrick = instance bigBrick
+                                applyPlacement newBrick bigBrick regionCenter
+                                append placedBounds targetBounds
+                                created += 1
+                                bigCreated += 1
+                            )
+                            else if overlapDebugLogsRemaining > 0 do debugLog ("Skipped big placement at " + regionCenter as string)
                         )
                         #boundary:
                         (
@@ -344,12 +419,18 @@ rollout voxelFillRaytraceUI "Temple Voxel Fill Tool (Raytrace Refined)"
 
                                 if mediumClassification[1] == #inside then
                                 (
-                                    local newMediumBrick = instance mediumBrick
-                                    newMediumBrick.position = mediumCenter
-                                    applyPlacement newMediumBrick mediumBrick
-                                    mediumOccupied.Add mediumKey true
-                                    created += 1
-                                    mediumCreated += 1
+                                    local mediumTargetBounds = getPlacementBounds mediumBrick mediumCenter
+
+                                    if not (placementOverlaps mediumTargetBounds placedBounds) then
+                                    (
+                                        local newMediumBrick = instance mediumBrick
+                                        applyPlacement newMediumBrick mediumBrick mediumCenter
+                                        mediumOccupied.Add mediumKey true
+                                        append placedBounds mediumTargetBounds
+                                        created += 1
+                                        mediumCreated += 1
+                                    )
+                                    else if overlapDebugLogsRemaining > 0 do debugLog ("Skipped medium placement at " + mediumCenter as string + " key=" + mediumKey)
                                 )
                             )
 
@@ -417,7 +498,7 @@ rollout voxelFillRaytraceUI "Temple Voxel Fill Tool (Raytrace Refined)"
                 debugLog ("Estimated steps=" + totalSteps as string + " bigSize=" + bigSize as string + mediumSummary)
 
                 local fillResult = runRaytraceFill templeMesh snapshotNode templeBounds bigBrick bigSize mediumBrick mediumSize totalSteps
-                updateProgress fillResult[2] totalSteps fillResult[1]
+                updateProgress totalSteps totalSteps fillResult[1]
                 fillStatus.text = ("Fill complete. Total=" + fillResult[1] as string + " Big=" + fillResult[3] as string + " Medium=" + fillResult[4] as string)
 
                 debugLog ("Fill complete. Total=" + fillResult[1] as string + " big=" + fillResult[3] as string + " medium=" + fillResult[4] as string + " boundaries=" + fillResult[5] as string + " processed=" + fillResult[2] as string)
