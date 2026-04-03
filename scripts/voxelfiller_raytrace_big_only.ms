@@ -149,21 +149,51 @@ rollout voxelFillRaytraceBigOnlyUI "Temple Voxel Fill Tool (Big Blocks Only)"
 
         for dir in directions do
         (
-            local rayOrigin = p - (dir * padding)
-            local maxDistance = distance rayOrigin p
-            local hitCount = countRayHitsToDistance obj rayOrigin dir maxDistance
-            if (mod hitCount 2) == 1 do insideVotes += 1
+            local forwardOrigin = p - (dir * padding)
+            local backwardOrigin = p + (dir * padding)
+            local forwardDistance = distance forwardOrigin p
+            local backwardDistance = distance backwardOrigin p
+            local forwardHitCount = countRayHitsToDistance obj forwardOrigin dir forwardDistance
+            local backwardHitCount = countRayHitsToDistance obj backwardOrigin (-dir) backwardDistance
+
+            if ((mod forwardHitCount 2) == 1) or ((mod backwardHitCount 2) == 1) do insideVotes += 1
         )
 
         insideVotes >= voteThreshold
     )
 
-    fn placementCornersInside targetCenter cornerOffsets raycastTarget templeBounds =
+    fn getPlacementSampleOffsets brickSize =
     (
-        for cornerOffset in cornerOffsets do
+        local halfSize = brickSize * 0.5
+        local minHalfExtent = amin halfSize.x (amin halfSize.y halfSize.z)
+        local insetAmount = amin (minHalfExtent * 0.15) 0.5
+        local insetHalf = [amax 0.0 (halfSize.x - insetAmount), amax 0.0 (halfSize.y - insetAmount), amax 0.0 (halfSize.z - insetAmount)]
+
+        #(
+            [0,0,0],
+            [ insetHalf.x,  insetHalf.y,  insetHalf.z],
+            [-insetHalf.x,  insetHalf.y,  insetHalf.z],
+            [ insetHalf.x, -insetHalf.y,  insetHalf.z],
+            [-insetHalf.x, -insetHalf.y,  insetHalf.z],
+            [ insetHalf.x,  insetHalf.y, -insetHalf.z],
+            [-insetHalf.x,  insetHalf.y, -insetHalf.z],
+            [ insetHalf.x, -insetHalf.y, -insetHalf.z],
+            [-insetHalf.x, -insetHalf.y, -insetHalf.z],
+            [ halfSize.x, 0, 0],
+            [-halfSize.x, 0, 0],
+            [0,  halfSize.y, 0],
+            [0, -halfSize.y, 0],
+            [0, 0,  halfSize.z],
+            [0, 0, -halfSize.z]
+        )
+    )
+
+    fn placementSamplesInside targetCenter sampleOffsets raycastTarget templeBounds =
+    (
+        for sampleOffset in sampleOffsets do
         (
-            local cornerPoint = targetCenter + cornerOffset
-            if not (evaluatePointInMesh cornerPoint raycastTarget templeBounds) do return false
+            local samplePoint = targetCenter + sampleOffset
+            if not (evaluatePointInMesh samplePoint raycastTarget templeBounds) do return false
         )
 
         true
@@ -179,7 +209,7 @@ rollout voxelFillRaytraceBigOnlyUI "Temple Voxel Fill Tool (Big Blocks Only)"
         axisMin + halfStep + ((sampleIndex as float) * stepSize)
     )
 
-    fn logPlacementSample sourceBrick targetCenter cornerOffsets newBrick =
+    fn logPlacementSample sourceBrick targetCenter sampleOffsets newBrick =
     (
         if placementDebugLogsRemaining > 0 then
         (
@@ -189,13 +219,13 @@ rollout voxelFillRaytraceBigOnlyUI "Temple Voxel Fill Tool (Big Blocks Only)"
             debugLog ("Placement source=" + sourceBrick.name + " sourcePos=" + sourceBrick.position as string + " targetCenter=" + targetCenter as string + " finalPos=" + newBrick.position as string)
             debugBounds "Placement newBounds" newBounds
             debugLog ("Placement newBoundsCenter=" + newBoundsCenter as string + " centerDelta=" + (newBoundsCenter - targetCenter) as string)
-            debugLog ("Placement firstCorner=" + (targetCenter + cornerOffsets[1]) as string + " lastCorner=" + (targetCenter + cornerOffsets[8]) as string)
+            debugLog ("Placement firstSample=" + (targetCenter + sampleOffsets[1]) as string + " lastSample=" + (targetCenter + sampleOffsets[sampleOffsets.count]) as string)
 
             placementDebugLogsRemaining -= 1
         )
     )
 
-    fn runBigBlockFill temple raycastTarget templeBounds sourceBrick brickSize cornerOffsets totalSteps =
+    fn runBigBlockFill temple raycastTarget templeBounds sourceBrick brickSize sampleOffsets totalSteps =
     (
         local created = 0
         local processed = 0
@@ -224,7 +254,7 @@ rollout voxelFillRaytraceBigOnlyUI "Temple Voxel Fill Tool (Big Blocks Only)"
 
                     processed += 1
 
-                    if placementCornersInside targetCenter cornerOffsets raycastTarget templeBounds then
+                    if placementSamplesInside targetCenter sampleOffsets raycastTarget templeBounds then
                     (
                         local newBrick = instance sourceBrick
                         newBrick.rotation = sourceBrick.rotation
@@ -232,7 +262,7 @@ rollout voxelFillRaytraceBigOnlyUI "Temple Voxel Fill Tool (Big Blocks Only)"
                         newBrick.position = targetCenter - centerOffset
                         newBrick.material = sourceBrick.material
 
-                        logPlacementSample sourceBrick targetCenter cornerOffsets newBrick
+                        logPlacementSample sourceBrick targetCenter sampleOffsets newBrick
 
                         created += 1
                     )
@@ -277,7 +307,7 @@ rollout voxelFillRaytraceBigOnlyUI "Temple Voxel Fill Tool (Big Blocks Only)"
         (
             local templeBounds = getTempleBounds templeMesh
             local brickSize = getBrickSize bigBrick
-            local cornerOffsets = getBrickCornerOffsets bigBrick
+            local sampleOffsets = getPlacementSampleOffsets brickSize
             local countX = getAxisSampleCount templeBounds[1].x templeBounds[2].x brickSize.x
             local countY = getAxisSampleCount templeBounds[1].y templeBounds[2].y brickSize.y
             local countZ = getAxisSampleCount templeBounds[1].z templeBounds[2].z brickSize.z
@@ -299,7 +329,7 @@ rollout voxelFillRaytraceBigOnlyUI "Temple Voxel Fill Tool (Big Blocks Only)"
                 debugLog ("Temple bounds min=" + templeBounds[1] as string + " max=" + templeBounds[2] as string)
                 debugLog ("Brick size=" + brickSize as string + " totalSteps=" + totalSteps as string)
 
-                local fillResult = runBigBlockFill templeMesh snapshotNode templeBounds bigBrick brickSize cornerOffsets totalSteps
+                local fillResult = runBigBlockFill templeMesh snapshotNode templeBounds bigBrick brickSize sampleOffsets totalSteps
                 updateProgress totalSteps totalSteps fillResult[1]
                 fillStatus.text = ("Fill complete. Total=" + fillResult[1] as string)
 
