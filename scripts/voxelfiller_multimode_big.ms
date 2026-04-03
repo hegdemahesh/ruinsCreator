@@ -6,6 +6,7 @@ rollout voxelFillMultiModeUI "Temple Fill Tool (Voxel Or Slice)"
     local bigBrick
     local fillCancelled = false
     local placementDebugLogsRemaining = 0
+    local rejectionDebugLogsRemaining = 0
 
     button pickTemple "Pick Temple Mesh"
     button pickBigBrick "Pick Big Brick Mesh"
@@ -78,6 +79,29 @@ rollout voxelFillMultiModeUI "Temple Fill Tool (Voxel Or Slice)"
     fn getBrickCenterOffset brickObj =
     (
         getBrickBoundsCenter brickObj - brickObj.position
+    )
+
+    fn getRecommendedCellSize templeBounds brickSize =
+    (
+        local boundsSize = templeBounds[2] - templeBounds[1]
+        local minBrickAxis = amin brickSize.x (amin brickSize.y brickSize.z)
+        local paddedVolume = (boundsSize.x + minBrickAxis) * (boundsSize.y + minBrickAxis) * (boundsSize.z + minBrickAxis)
+        local budgetCellSize = amax 0.1 (paddedVolume / 200000.0) ^ (1.0 / 3.0)
+        local detailCellSize = amax 0.1 (minBrickAxis / 3.0)
+
+        amax detailCellSize budgetCellSize
+    )
+
+    fn updateAutoCellSize =
+    (
+        if templeMesh != undefined and bigBrick != undefined then
+        (
+            local templeBounds = getTempleBounds templeMesh
+            local brickSize = getBrickSize bigBrick
+            local recommendedCellSize = getRecommendedCellSize templeBounds brickSize
+            cellSizeSpinner.value = recommendedCellSize
+            debugLog ("Auto cell size=" + recommendedCellSize as string + " brickSize=" + brickSize as string)
+        )
     )
 
     fn getBoundsCorners boundsValue =
@@ -172,6 +196,20 @@ rollout voxelFillMultiModeUI "Temple Fill Tool (Voxel Or Slice)"
     (
         local halfSize = brickSize * 0.5
         #(targetCenter - halfSize, targetCenter + halfSize)
+    )
+
+    fn getFootprintCounts brickSize cellSize =
+    (
+        #(
+            amax 1 (ceil (brickSize.x / cellSize)),
+            amax 1 (ceil (brickSize.y / cellSize)),
+            amax 1 (ceil (brickSize.z / cellSize))
+        )
+    )
+
+    fn createPlacementPosition x y z footprintCounts gridMin cellSize =
+    (
+        [gridMin.x + (((x as float) + ((footprintCounts[1] as float) * 0.5)) * cellSize), gridMin.y + (((y as float) + ((footprintCounts[2] as float) * 0.5)) * cellSize), gridMin.z + (((z as float) + ((footprintCounts[3] as float) * 0.5)) * cellSize)]
     )
 
     fn getCellRangeForBounds worldBounds gridMin cellSize counts =
@@ -484,6 +522,95 @@ rollout voxelFillMultiModeUI "Temple Fill Tool (Voxel Or Slice)"
         true
     )
 
+    fn footprintFitsInterior x y z footprintCounts interiorVoxels occupiedVoxels counts =
+    (
+        local maxX = x + footprintCounts[1] - 1
+        local maxY = y + footprintCounts[2] - 1
+        local maxZ = z + footprintCounts[3] - 1
+
+        if not (isCellInBounds x y z counts) then return false
+        if not (isCellInBounds maxX maxY maxZ counts) then return false
+
+        for ix = x to maxX do
+        (
+            for iy = y to maxY do
+            (
+                for iz = z to maxZ do
+                (
+                    local key = makeVoxelKey ix iy iz
+                    if not (hashHasKey interiorVoxels key) or hashHasKey occupiedVoxels key do return false
+                )
+            )
+        )
+
+        true
+    )
+
+    fn markOccupied x y z footprintCounts occupiedVoxels =
+    (
+        for ix = x to (x + footprintCounts[1] - 1) do
+        (
+            for iy = y to (y + footprintCounts[2] - 1) do
+            (
+                for iz = z to (z + footprintCounts[3] - 1) do
+                (
+                    setHashTrue occupiedVoxels (makeVoxelKey ix iy iz)
+                )
+            )
+        )
+    )
+
+    fn getFirstMissingInteriorCell cellRange interiorVoxels counts =
+    (
+        local minCell = cellRange[1]
+        local maxCell = cellRange[2]
+
+        if not (isCellInBounds minCell[1] minCell[2] minCell[3] counts) then return #(#outOfBounds, minCell)
+        if not (isCellInBounds maxCell[1] maxCell[2] maxCell[3] counts) then return #(#outOfBounds, maxCell)
+
+        for x = minCell[1] to maxCell[1] do
+        (
+            for y = minCell[2] to maxCell[2] do
+            (
+                for z = minCell[3] to maxCell[3] do
+                (
+                    if not (hashHasKey interiorVoxels (makeVoxelKey x y z)) do return #(#missingInterior, #(x, y, z))
+                )
+            )
+        )
+
+        #(#ok, undefined)
+    )
+
+    fn logPlacementRejection targetCenter worldBounds cellRange gridMin cellSize counts interiorVoxels =
+    (
+        if rejectionDebugLogsRemaining > 0 then
+        (
+            local missingInfo = getFirstMissingInteriorCell cellRange interiorVoxels counts
+            local missingState = missingInfo[1]
+            local missingCell = missingInfo[2]
+
+            debugLog ("Rejected placement targetCenter=" + targetCenter as string + " cellRange=" + cellRange as string)
+            debugBounds "Rejected placement worldBounds" worldBounds
+
+            if missingState == #missingInterior then
+            (
+                local missingCellCenter = cellCenterToWorld missingCell[1] missingCell[2] missingCell[3] gridMin cellSize
+                debugLog ("Rejected missing interior cell=" + missingCell as string + " center=" + missingCellCenter as string)
+            )
+            else if missingState == #outOfBounds then
+            (
+                debugLog ("Rejected out-of-bounds cell=" + missingCell as string + " counts=" + counts as string)
+            )
+            else
+            (
+                debugLog "Rejected placement reason unresolved"
+            )
+
+            rejectionDebugLogsRemaining -= 1
+        )
+    )
+
     fn logPlacementSample sourceBrick targetCenter worldBounds newBrick =
     (
         if debugSamplesCheck.checked and placementDebugLogsRemaining > 0 then
@@ -505,44 +632,46 @@ rollout voxelFillMultiModeUI "Temple Fill Tool (Voxel Or Slice)"
 
     fn placeBigBricks templeBounds gridMin counts cellSize sourceBrick brickSize interiorVoxels totalSteps processedStart =
     (
+        local occupiedVoxels = dotNetObject "System.Collections.Hashtable"
         local created = 0
         local processed = processedStart
-        local countX = amax 1 ((floor ((templeBounds[2].x - templeBounds[1].x) / brickSize.x)) as integer)
-        local countY = amax 1 ((floor ((templeBounds[2].y - templeBounds[1].y) / brickSize.y)) as integer)
-        local countZ = amax 1 ((floor ((templeBounds[2].z - templeBounds[1].z) / brickSize.z)) as integer)
-        local halfSize = brickSize * 0.5
+        local footprintCounts = getFootprintCounts brickSize cellSize
+        local maxX = amax 0 (counts[1] - footprintCounts[1])
+        local maxY = amax 0 (counts[2] - footprintCounts[2])
+        local maxZ = amax 0 (counts[3] - footprintCounts[3])
         local centerOffset = getBrickCenterOffset sourceBrick
 
         placementDebugLogsRemaining = 10
+    rejectionDebugLogsRemaining = 14
 
-        debugLog ("Placement array counts=" + #(countX, countY, countZ) as string + " brickSize=" + brickSize as string)
+        debugLog ("Placement grid counts=" + #(maxX + 1, maxY + 1, maxZ + 1) as string + " brickSize=" + brickSize as string + " footprint=" + footprintCounts as string)
 
-        for xIndex = 0 to (countX - 1) while not fillCancelled do
+        for xIndex = 0 to maxX while not fillCancelled do
         (
-            local centerX = templeBounds[1].x + halfSize.x + ((xIndex as float) * brickSize.x)
-
-            for yIndex = 0 to (countY - 1) while not fillCancelled do
+            for yIndex = 0 to maxY while not fillCancelled do
             (
-                local centerY = templeBounds[1].y + halfSize.y + ((yIndex as float) * brickSize.y)
-
-                for zIndex = 0 to (countZ - 1) while not fillCancelled do
+                for zIndex = 0 to maxZ while not fillCancelled do
                 (
-                    local centerZ = templeBounds[1].z + halfSize.z + ((zIndex as float) * brickSize.z)
-                    local targetCenter = [centerX, centerY, centerZ]
+                    local targetCenter = createPlacementPosition xIndex yIndex zIndex footprintCounts gridMin cellSize
                     local worldBounds = getWorldBoundsForPlacement targetCenter brickSize
-                    local cellRange = getCellRangeForBounds worldBounds gridMin cellSize counts
+                    local cellRange = #(#(xIndex, yIndex, zIndex), #(xIndex + footprintCounts[1] - 1, yIndex + footprintCounts[2] - 1, zIndex + footprintCounts[3] - 1))
 
                     processed += 1
 
-                    if cellRangeFitsInterior cellRange interiorVoxels counts then
+                    if footprintFitsInterior xIndex yIndex zIndex footprintCounts interiorVoxels occupiedVoxels counts then
                     (
                         local newBrick = instance sourceBrick
                         newBrick.rotation = sourceBrick.rotation
                         newBrick.scale = sourceBrick.scale
                         newBrick.position = targetCenter - centerOffset
                         newBrick.material = sourceBrick.material
+                        markOccupied xIndex yIndex zIndex footprintCounts occupiedVoxels
                         logPlacementSample sourceBrick targetCenter worldBounds newBrick
                         created += 1
+                    )
+                    else if debugSamplesCheck.checked do
+                    (
+                        logPlacementRejection targetCenter worldBounds cellRange gridMin cellSize counts interiorVoxels
                     )
 
                     if (mod processed 25) == 0 or processed == totalSteps do updateProgress processed totalSteps created
@@ -592,7 +721,12 @@ rollout voxelFillMultiModeUI "Temple Fill Tool (Voxel Or Slice)"
     on pickTemple pressed do
     (
         templeMesh = pickObject()
-        if templeMesh != undefined do debugLog ("Picked temple: " + templeMesh.name)
+        if templeMesh != undefined do
+        (
+            debugLog ("Picked temple: " + templeMesh.name)
+            debugBounds "Picked temple bounds" (getTempleBounds templeMesh)
+            updateAutoCellSize()
+        )
     )
 
     on pickBigBrick pressed do
@@ -602,6 +736,7 @@ rollout voxelFillMultiModeUI "Temple Fill Tool (Voxel Or Slice)"
         (
             debugLog ("Picked big brick: " + bigBrick.name + " size=" + (getBrickSize bigBrick) as string)
             debugBounds "Picked big brick bounds" (getBrickWorldBounds bigBrick)
+            updateAutoCellSize()
         )
     )
 
@@ -611,17 +746,20 @@ rollout voxelFillMultiModeUI "Temple Fill Tool (Voxel Or Slice)"
         (
             local templeBounds = getTempleBounds templeMesh
             local brickSize = getBrickSize bigBrick
-            local cellSize = amax 0.1 cellSizeSpinner.value
+            local cellSize = getRecommendedCellSize templeBounds brickSize
             local paddingCells = amax 0 paddingCellsSpinner.value
-            local modeName = modeDropdown.selected
+            local modeName = modeDropdown.items[modeDropdown.selection]
             local gridInfo = buildGridInfo templeBounds cellSize
             local gridMin = gridInfo[1]
             local gridMax = gridInfo[2]
             local counts = gridInfo[3]
             local snapshotNode = createTempleSnapshot templeMesh
 
+            cellSizeSpinner.value = cellSize
+
             debugBounds "Temple bounds" templeBounds
             debugLog ("Grid min=" + gridMin as string + " max=" + gridMax as string + " counts=" + counts as string)
+            debugLog ("Mode=" + modeName + " autoCellSize=" + cellSize as string + " brickCenterOffset=" + (getBrickCenterOffset bigBrick) as string)
 
             if not (validateSettings counts cellSize) then
             (
