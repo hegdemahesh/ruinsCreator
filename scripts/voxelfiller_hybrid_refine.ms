@@ -1,3 +1,5 @@
+try(destroyDialog voxelFillHybridUI)catch()
+
 rollout voxelFillHybridUI "Temple Voxel Fill Tool (Hybrid)"
 (
     local templeMesh
@@ -328,37 +330,28 @@ rollout voxelFillHybridUI "Temple Voxel Fill Tool (Hybrid)"
                     local coarseRegionMax = coarseCenter + (bigSize * 0.5)
                     local placementVariation = getPlacementVariation()
                     local placementBounds = getPlacementBounds coarseCenter bigSize placementVariation
-                    local classification = undefined
+                    local classification = classifyBounds placementBounds[1] placementBounds[2] raycastTarget templeBounds
 
                     processed += 1
 
-                    if boundsInsideRegion placementBounds coarseRegionMin coarseRegionMax then
+                    if debugSamplesCheck.checked and classification[1] != #outside do debugLog ("Large sample " + #(xIndex, yIndex, zIndex) as string + " state=" + classification[1] as string + " in=" + classification[2] as string + " out=" + classification[3] as string)
+
+                    case classification[1] of
                     (
-                        classification = classifyBounds placementBounds[1] placementBounds[2] raycastTarget templeBounds
-
-                        if debugSamplesCheck.checked and classification[1] != #outside do debugLog ("Large sample " + #(xIndex, yIndex, zIndex) as string + " state=" + classification[1] as string + " in=" + classification[2] as string + " out=" + classification[3] as string)
-
-                        case classification[1] of
+                        #inside:
                         (
-                            #inside:
-                            (
-                                local newBrick = instance bigBrick
-                                newBrick.position = coarseCenter
-                                applyPlacementVariation newBrick bigBrick placementVariation
-                                created += 1
-                            )
-                            #boundary:
-                            (
-                                append boundaryCells #(coarseRegionMin, coarseRegionMax)
-                            )
-                            default:
-                            (
-                            )
+                            local newBrick = instance bigBrick
+                            newBrick.position = coarseCenter
+                            applyPlacementVariation newBrick bigBrick placementVariation
+                            created += 1
                         )
-                    )
-                    else
-                    (
-                        append boundaryCells #(coarseRegionMin, coarseRegionMax)
+                        #boundary:
+                        (
+                            append boundaryCells #(coarseRegionMin, coarseRegionMax)
+                        )
+                        default:
+                        (
+                        )
                     )
 
                     if (mod processed 50) == 0 or processed == totalSteps do updateProgress processed totalSteps created
@@ -398,7 +391,7 @@ rollout voxelFillHybridUI "Temple Voxel Fill Tool (Hybrid)"
 
                             processed += 1
 
-                            if not (hashHasKey mediumOccupied mediumKey) and boundsInsideRegion mediumPlacementBounds regionMin regionMax then
+                            if not (hashHasKey mediumOccupied mediumKey) then
                             (
                                 local mediumClassification = classifyBounds mediumPlacementBounds[1] mediumPlacementBounds[2] raycastTarget templeBounds
 
