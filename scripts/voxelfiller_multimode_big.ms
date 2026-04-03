@@ -174,7 +174,7 @@ rollout voxelFillMultiModeUI "Temple Fill Tool (Voxel Or Slice)"
 
     fn getCellIndex value origin cellSize axisCount =
     (
-        local rawIndex = floor ((value - origin) / cellSize)
+        local rawIndex = (floor ((value - origin) / cellSize)) as integer
         amin (axisCount - 1) (amax 0 rawIndex)
     )
 
@@ -201,9 +201,9 @@ rollout voxelFillMultiModeUI "Temple Fill Tool (Voxel Or Slice)"
     fn getFootprintCounts brickSize cellSize =
     (
         #(
-            amax 1 (ceil (brickSize.x / cellSize)),
-            amax 1 (ceil (brickSize.y / cellSize)),
-            amax 1 (ceil (brickSize.z / cellSize))
+            (amax 1 (ceil (brickSize.x / cellSize))) as integer,
+            (amax 1 (ceil (brickSize.y / cellSize))) as integer,
+            (amax 1 (ceil (brickSize.z / cellSize))) as integer
         )
     )
 
@@ -522,20 +522,19 @@ rollout voxelFillMultiModeUI "Temple Fill Tool (Voxel Or Slice)"
         true
     )
 
-    fn footprintFitsInterior x y z footprintCounts interiorVoxels occupiedVoxels counts =
+    fn cellRangeFitsAvailable cellRange interiorVoxels occupiedVoxels counts =
     (
-        local maxX = x + footprintCounts[1] - 1
-        local maxY = y + footprintCounts[2] - 1
-        local maxZ = z + footprintCounts[3] - 1
+        local minCell = cellRange[1]
+        local maxCell = cellRange[2]
 
-        if not (isCellInBounds x y z counts) then return false
-        if not (isCellInBounds maxX maxY maxZ counts) then return false
+        if not (isCellInBounds minCell[1] minCell[2] minCell[3] counts) then return false
+        if not (isCellInBounds maxCell[1] maxCell[2] maxCell[3] counts) then return false
 
-        for ix = x to maxX do
+        for ix = minCell[1] to maxCell[1] do
         (
-            for iy = y to maxY do
+            for iy = minCell[2] to maxCell[2] do
             (
-                for iz = z to maxZ do
+                for iz = minCell[3] to maxCell[3] do
                 (
                     local key = makeVoxelKey ix iy iz
                     if not (hashHasKey interiorVoxels key) or hashHasKey occupiedVoxels key do return false
@@ -546,13 +545,35 @@ rollout voxelFillMultiModeUI "Temple Fill Tool (Voxel Or Slice)"
         true
     )
 
-    fn markOccupied x y z footprintCounts occupiedVoxels =
+    fn cellRangeFitsInteriorOnly cellRange interiorVoxels counts =
     (
-        for ix = x to (x + footprintCounts[1] - 1) do
+        local minCell = cellRange[1]
+        local maxCell = cellRange[2]
+
+        if not (isCellInBounds minCell[1] minCell[2] minCell[3] counts) then return false
+        if not (isCellInBounds maxCell[1] maxCell[2] maxCell[3] counts) then return false
+
+        for ix = minCell[1] to maxCell[1] do
         (
-            for iy = y to (y + footprintCounts[2] - 1) do
+            for iy = minCell[2] to maxCell[2] do
             (
-                for iz = z to (z + footprintCounts[3] - 1) do
+                for iz = minCell[3] to maxCell[3] do
+                (
+                    if not (hashHasKey interiorVoxels (makeVoxelKey ix iy iz)) do return false
+                )
+            )
+        )
+
+        true
+    )
+
+    fn markOccupiedRange cellRange occupiedVoxels =
+    (
+        for ix = cellRange[1][1] to cellRange[2][1] do
+        (
+            for iy = cellRange[1][2] to cellRange[2][2] do
+            (
+                for iz = cellRange[1][3] to cellRange[2][3] do
                 (
                     setHashTrue occupiedVoxels (makeVoxelKey ix iy iz)
                 )
@@ -630,64 +651,138 @@ rollout voxelFillMultiModeUI "Temple Fill Tool (Voxel Or Slice)"
         )
     )
 
-    fn placeBigBricks templeBounds gridMin counts cellSize sourceBrick brickSize interiorVoxels totalSteps processedStart =
+    fn getOffsetCandidates brickSize =
     (
-        local occupiedVoxels = dotNetObject "System.Collections.Hashtable"
-        local created = 0
-        local processed = processedStart
-        local footprintCounts = getFootprintCounts brickSize cellSize
-        local maxX = amax 0 (counts[1] - footprintCounts[1])
-        local maxY = amax 0 (counts[2] - footprintCounts[2])
-        local maxZ = amax 0 (counts[3] - footprintCounts[3])
-        local centerOffset = getBrickCenterOffset sourceBrick
+        local offsets = #()
+        local offsetXValues = #(0.0, brickSize.x * 0.5)
+        local offsetYValues = #(0.0, brickSize.y * 0.5)
+        local offsetZValues = #(0.0, brickSize.z * 0.5)
 
-        placementDebugLogsRemaining = 10
-    rejectionDebugLogsRemaining = 14
-
-        debugLog ("Placement grid counts=" + #(maxX + 1, maxY + 1, maxZ + 1) as string + " brickSize=" + brickSize as string + " footprint=" + footprintCounts as string)
-
-        for xIndex = 0 to maxX while not fillCancelled do
+        for offsetX in offsetXValues do
         (
-            for yIndex = 0 to maxY while not fillCancelled do
+            for offsetY in offsetYValues do
             (
-                for zIndex = 0 to maxZ while not fillCancelled do
+                for offsetZ in offsetZValues do
                 (
-                    local targetCenter = createPlacementPosition xIndex yIndex zIndex footprintCounts gridMin cellSize
+                    append offsets [offsetX, offsetY, offsetZ]
+                )
+            )
+        )
+
+        offsets
+    )
+
+    fn buildPlacementPlan templeBounds gridMin counts cellSize brickSize interiorVoxels offsetVector =
+    (
+        local placements = #()
+        local halfSize = brickSize * 0.5
+        local startCenter = templeBounds[1] + halfSize + offsetVector
+        local maxCenter = templeBounds[2] - halfSize
+        local processed = 0
+
+        if startCenter.x > maxCenter.x or startCenter.y > maxCenter.y or startCenter.z > maxCenter.z then return #(#(), processed)
+
+        local centerX = startCenter.x
+        while centerX <= maxCenter.x and not fillCancelled do
+        (
+            local centerY = startCenter.y
+
+            while centerY <= maxCenter.y and not fillCancelled do
+            (
+                local centerZ = startCenter.z
+
+                while centerZ <= maxCenter.z and not fillCancelled do
+                (
+                    local targetCenter = [centerX, centerY, centerZ]
                     local worldBounds = getWorldBoundsForPlacement targetCenter brickSize
-                    local cellRange = #(#(xIndex, yIndex, zIndex), #(xIndex + footprintCounts[1] - 1, yIndex + footprintCounts[2] - 1, zIndex + footprintCounts[3] - 1))
+                    local cellRange = getCellRangeForBounds worldBounds gridMin cellSize counts
 
                     processed += 1
 
-                    if footprintFitsInterior xIndex yIndex zIndex footprintCounts interiorVoxels occupiedVoxels counts then
+                    if cellRangeFitsInteriorOnly cellRange interiorVoxels counts then
                     (
-                        local newBrick = instance sourceBrick
-                        newBrick.rotation = sourceBrick.rotation
-                        newBrick.scale = sourceBrick.scale
-                        newBrick.position = targetCenter - centerOffset
-                        newBrick.material = sourceBrick.material
-                        markOccupied xIndex yIndex zIndex footprintCounts occupiedVoxels
-                        logPlacementSample sourceBrick targetCenter worldBounds newBrick
-                        created += 1
+                        append placements #(targetCenter, worldBounds, cellRange)
                     )
-                    else if debugSamplesCheck.checked do
+                    else if debugSamplesCheck.checked and rejectionDebugLogsRemaining > 0 then
                     (
                         logPlacementRejection targetCenter worldBounds cellRange gridMin cellSize counts interiorVoxels
                     )
 
-                    if (mod processed 25) == 0 or processed == totalSteps do updateProgress processed totalSteps created
+                    centerZ += brickSize.z
                 )
+
+                centerY += brickSize.y
             )
+
+            centerX += brickSize.x
+        )
+
+        #(placements, processed)
+    )
+
+    fn placeBigBricks templeBounds gridMin counts cellSize sourceBrick brickSize interiorVoxels totalSteps processedStart =
+    (
+        local created = 0
+        local processed = processedStart
+        local offsetCandidates = getOffsetCandidates brickSize
+        local bestPlacements = #()
+        local bestOffset = [0,0,0]
+        local centerOffset = getBrickCenterOffset sourceBrick
+
+        placementDebugLogsRemaining = 10
+        rejectionDebugLogsRemaining = 14
+
+        debugLog ("Placement candidate sets=" + offsetCandidates.count as string + " brickSize=" + brickSize as string + " footprint=" + (getFootprintCounts brickSize cellSize) as string)
+
+        for offsetVector in offsetCandidates while not fillCancelled do
+        (
+            local planResult = buildPlacementPlan templeBounds gridMin counts cellSize brickSize interiorVoxels offsetVector
+            local planPlacements = planResult[1]
+
+            processed += planResult[2]
+            debugLog ("Offset " + offsetVector as string + " placements=" + planPlacements.count as string)
+
+            if planPlacements.count > bestPlacements.count then
+            (
+                bestPlacements = planPlacements
+                bestOffset = offsetVector
+            )
+
+            updateProgress processed totalSteps created
+        )
+
+        debugLog ("Selected offset=" + bestOffset as string + " placements=" + bestPlacements.count as string)
+
+        for placementData in bestPlacements while not fillCancelled do
+        (
+            local targetCenter = placementData[1]
+            local worldBounds = placementData[2]
+            local newBrick = instance sourceBrick
+
+            newBrick.rotation = sourceBrick.rotation
+            newBrick.scale = sourceBrick.scale
+            newBrick.position = targetCenter - centerOffset
+            newBrick.material = sourceBrick.material
+            logPlacementSample sourceBrick targetCenter worldBounds newBrick
+            created += 1
+
+            if (mod created 25) == 0 or created == bestPlacements.count do updateProgress processed totalSteps created
         )
 
         #(created, processed)
     )
 
+    fn estimatePlacementCandidates templeBounds brickSize =
+    (
+        local countX = amax 1 ((floor ((templeBounds[2].x - templeBounds[1].x) / brickSize.x)) as integer)
+        local countY = amax 1 ((floor ((templeBounds[2].y - templeBounds[1].y) / brickSize.y)) as integer)
+        local countZ = amax 1 ((floor ((templeBounds[2].z - templeBounds[1].z) / brickSize.z)) as integer)
+        countX * countY * countZ
+    )
+
     fn estimateTotalSteps modeName snapshotNode counts templeBounds brickSize =
     (
-        local placementCountX = amax 1 ((floor ((templeBounds[2].x - templeBounds[1].x) / brickSize.x)) as integer)
-        local placementCountY = amax 1 ((floor ((templeBounds[2].y - templeBounds[1].y) / brickSize.y)) as integer)
-        local placementCountZ = amax 1 ((floor ((templeBounds[2].z - templeBounds[1].z) / brickSize.z)) as integer)
-        local placementSteps = placementCountX * placementCountY * placementCountZ
+        local placementSteps = estimatePlacementCandidates templeBounds brickSize * (getOffsetCandidates brickSize).count
 
         if modeName == "Voxel Occupancy" then
         (
