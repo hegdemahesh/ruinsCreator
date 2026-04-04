@@ -7,15 +7,18 @@ rollout voxelFillTempleSliceUI "Temple Slice Fill Tool"
     local secondaryBrick
     local fillCancelled = false
     local placementDebugLogsRemaining = 0
+    local rayDebugLogsRemaining = 0
+    local rejectionDebugLogsRemaining = 0
     local internalRayStartPadding = 0.03
+    local internalSurfaceSampleInset = 0.02
 
     button pickTemple "Pick Temple Mesh"
     button pickPrimaryBrick "Pick Primary Brick"
     button pickSecondaryBrick "Pick Secondary Brick"
 
     groupBox optionsGroup "Slice Options" width:340 height:112
-    spinner secondaryCountSpinner "Secondary Blocks" range:[0,200,5000] type:#integer fieldwidth:70
-    spinner supportSearchSpinner "Secondary Attempts x" range:[1,24,100] type:#integer fieldwidth:70
+    spinner secondaryCountSpinner "Secondary Blocks" range:[0,5000,200] type:#integer fieldwidth:70
+    spinner supportSearchSpinner "Secondary Attempts x" range:[1,100,24] type:#integer fieldwidth:70
     checkbox centerTemplatePivotCheck "Center Template Pivot" checked:true
     checkbox alignToSurfaceCheck "Align Boundary Blocks To Surface" checked:true
 
@@ -325,6 +328,20 @@ rollout voxelFillTempleSliceUI "Temple Slice Fill Tool"
         hitResults
     )
 
+    fn getFirstRayHit obj rayOrigin rayDir maxDistance =
+    (
+        local normalizedDir = normalize rayDir
+        local hit = intersectRay obj (ray rayOrigin normalizedDir)
+
+        if hit == undefined then return undefined
+
+        local hitDistance = distance rayOrigin hit.pos
+        if hitDistance > (maxDistance + 0.0001) then return undefined
+
+        local hitNormal = if isProperty hit #dir then (normalize hit.dir) else (if isProperty hit #norm then (normalize hit.norm) else (-normalizedDir))
+        #(hit.pos, hitNormal, hitDistance)
+    )
+
     fn evaluatePointInMesh p obj bounds =
     (
         local directions = #(
@@ -382,16 +399,21 @@ rollout voxelFillTempleSliceUI "Temple Slice Fill Tool"
         )
     )
 
+    fn getInsetBounds targetBounds insetAmount =
+    (
+        local sizeVector = targetBounds[2] - targetBounds[1]
+        local insetX = amin insetAmount (amax 0.0 ((sizeVector.x * 0.5) - 0.0001))
+        local insetY = amin insetAmount (amax 0.0 ((sizeVector.y * 0.5) - 0.0001))
+        local insetZ = amin insetAmount (amax 0.0 ((sizeVector.z * 0.5) - 0.0001))
+        local insetVector = [insetX, insetY, insetZ]
+
+        #(targetBounds[1] + insetVector, targetBounds[2] - insetVector)
+    )
+
     fn boundsFitInsideMesh targetBounds raycastTarget templeBounds =
     (
-        local samplePoints = getBoundsSamplePoints targetBounds[1] targetBounds[2]
-
-        for samplePoint in samplePoints do
-        (
-            if not (evaluatePointInMesh samplePoint raycastTarget templeBounds) do return false
-        )
-
-        true
+        local targetCenter = (targetBounds[1] + targetBounds[2]) * 0.5
+        evaluatePointInMesh targetCenter raycastTarget templeBounds
     )
 
     fn getAxisSampleCount axisMin axisMax stepSize =
@@ -432,11 +454,22 @@ rollout voxelFillTempleSliceUI "Temple Slice Fill Tool"
         if length planarNormal < 0.0001 then defaultYaw else ((atan2 planarNormal.y planarNormal.x) + 90.0)
     )
 
-    fn canPlaceBounds targetBounds raycastTarget templeBounds occupiedCells occupancyOrigin occupancyCellSize placedBounds =
+    fn logPlacementRejection targetCenter targetBounds rejectionReason =
     (
-        if boundsTouchOccupied targetBounds occupiedCells occupancyOrigin occupancyCellSize then return false
-        if placementOverlaps targetBounds placedBounds then return false
-        boundsFitInsideMesh targetBounds raycastTarget templeBounds
+        if rejectionDebugLogsRemaining > 0 then
+        (
+            debugLog ("Rejected block center=" + targetCenter as string + " reason=" + rejectionReason)
+            debugBounds "Rejected bounds" targetBounds
+            rejectionDebugLogsRemaining -= 1
+        )
+    )
+
+    fn getPlacementRejectionReason targetBounds raycastTarget templeBounds occupiedCells occupancyOrigin occupancyCellSize placedBounds =
+    (
+        if boundsTouchOccupied targetBounds occupiedCells occupancyOrigin occupancyCellSize then return #occupied
+        if placementOverlaps targetBounds placedBounds then return #overlap
+        if not (boundsFitInsideMesh targetBounds raycastTarget templeBounds) then return #outside
+        #ok
     )
 
     fn registerPlacedBlock newBrick targetBounds isPrimary occupiedCells occupancyOrigin occupancyCellSize placedBounds placedLookup primarySupportBounds =
@@ -447,7 +480,7 @@ rollout voxelFillTempleSliceUI "Temple Slice Fill Tool"
 
         local placementId = "block|" + placedBounds.count as string
         local placementRecord = #(newBrick, targetBounds, isPrimary)
-        placementLookup.Add placementId placementRecord
+        append placedLookup #(placementId, placementRecord)
         placementId
     )
 
@@ -469,8 +502,9 @@ rollout voxelFillTempleSliceUI "Temple Slice Fill Tool"
     fn tryPlaceBlock sourceTemplate targetCenter yawAngle cornerOffsets raycastTarget templeBounds occupiedCells occupancyOrigin occupancyCellSize placedBounds placedLookup primarySupportBounds isPrimary =
     (
         local targetBounds = getRotatedBoundsFromCenter targetCenter cornerOffsets yawAngle
+        local rejectionReason = getPlacementRejectionReason targetBounds raycastTarget templeBounds occupiedCells occupancyOrigin occupancyCellSize placedBounds
 
-        if canPlaceBounds targetBounds raycastTarget templeBounds occupiedCells occupancyOrigin occupancyCellSize placedBounds then
+        if rejectionReason == #ok then
         (
             local newBrick = createPlacedBrick sourceTemplate targetCenter yawAngle
             registerPlacedBlock newBrick targetBounds isPrimary occupiedCells occupancyOrigin occupancyCellSize placedBounds placedLookup primarySupportBounds
@@ -486,6 +520,7 @@ rollout voxelFillTempleSliceUI "Temple Slice Fill Tool"
         )
         else
         (
+            logPlacementRejection targetCenter targetBounds rejectionReason as string
             false
         )
     )
@@ -550,7 +585,8 @@ rollout voxelFillTempleSliceUI "Temple Slice Fill Tool"
     (
         local processed = processedCount
         local created = createdCount
-        local rayDir = if axisName == #x then [1, 0, 0] else [0, 1, 0]
+        local forwardDir = if axisName == #x then [1, 0, 0] else [0, 1, 0]
+        local backwardDir = -forwardDir
         local crossMin = if axisName == #x then fillBounds[1].y else fillBounds[1].x
         local crossMax = if axisName == #x then fillBounds[2].y else fillBounds[2].x
         local crossStep = if axisName == #x then sourceSize.y else sourceSize.x
@@ -560,17 +596,26 @@ rollout voxelFillTempleSliceUI "Temple Slice Fill Tool"
         for rayIndex = 0 to (rayCount - 1) while not fillCancelled do
         (
             local crossValue = getAxisSamplePosition rayIndex crossMin crossStep
-            local rayOrigin = if axisName == #x then [rayBounds[1].x, crossValue, sliceZ] else [crossValue, rayBounds[1].y, sliceZ]
-            local hitResults = collectRayHits raycastTarget rayOrigin rayDir rayLength
+            local rayOriginForward = if axisName == #x then [rayBounds[1].x, crossValue, sliceZ] else [crossValue, rayBounds[1].y, sliceZ]
+            local rayOriginBackward = if axisName == #x then [rayBounds[2].x, crossValue, sliceZ] else [crossValue, rayBounds[2].y, sliceZ]
+            local firstHit = getFirstRayHit raycastTarget rayOriginForward forwardDir rayLength
+            local lastHit = getFirstRayHit raycastTarget rayOriginBackward backwardDir rayLength
+            local hitCount = 0
 
-            if hitResults.count >= 2 then
+            if firstHit != undefined do hitCount += 1
+            if lastHit != undefined do hitCount += 1
+
+            if rayDebugLogsRemaining > 0 then
             (
-                local pairLimit = hitResults.count - (mod hitResults.count 2)
+                local firstHitText = if firstHit != undefined then firstHit[1] as string else "none"
+                local lastHitText = if lastHit != undefined then lastHit[1] as string else "none"
+                debugLog ("Ray axis=" + axisName as string + " sliceZ=" + sliceZ as string + " cross=" + crossValue as string + " hits=" + hitCount as string + " first=" + firstHitText + " last=" + lastHitText)
+                rayDebugLogsRemaining -= 1
+            )
 
-                for hitIndex = 1 to (pairLimit - 1) by 2 do
-                (
-                    created += placeSegmentBlocks axisName crossValue sliceZ hitResults[hitIndex] hitResults[hitIndex + 1] sourceTemplate sourceSize cornerOffsets defaultYaw raycastTarget templeBounds occupiedCells occupancyOrigin occupancyCellSize placedBounds placedLookup primarySupportBounds
-                )
+            if firstHit != undefined and lastHit != undefined then
+            (
+                created += placeSegmentBlocks axisName crossValue sliceZ firstHit lastHit sourceTemplate sourceSize cornerOffsets defaultYaw raycastTarget templeBounds occupiedCells occupancyOrigin occupancyCellSize placedBounds placedLookup primarySupportBounds
             )
 
             processed += 1
@@ -654,7 +699,7 @@ rollout voxelFillTempleSliceUI "Temple Slice Fill Tool"
         local occupancyCellSize = amax 0.5 (amin primarySize.x (amin primarySize.y (amin primarySize.z (amin secondarySize.x (amin secondarySize.y secondarySize.z)))))
         local occupancyOrigin = fillBounds[1] - [occupancyCellSize, occupancyCellSize, occupancyCellSize]
         local occupiedCells = dotNetObject "System.Collections.Hashtable"
-        local placedLookup = dotNetObject "System.Collections.Hashtable"
+        local placedLookup = #()
         local placedBounds = #()
         local primarySupportBounds = #()
         local totalSteps = estimateTotalSteps fillBounds primarySize secondaryCountSpinner.value
@@ -665,6 +710,8 @@ rollout voxelFillTempleSliceUI "Temple Slice Fill Tool"
         local secondarySummary = 0
 
         placementDebugLogsRemaining = 16
+        rayDebugLogsRemaining = 24
+        rejectionDebugLogsRemaining = 24
 
         debugLog "----- Temple Slice Fill Start -----"
         debugBounds "Temple bounds" baseTempleBounds
@@ -672,6 +719,7 @@ rollout voxelFillTempleSliceUI "Temple Slice Fill Tool"
         debugBounds "Ray bounds" rayBounds
         debugLog ("Internal ray-start padding=" + internalRayStartPadding as string + "m")
         debugLog ("Primary size=" + primarySize as string + " secondary size=" + secondarySize as string + " occupancyCell=" + occupancyCellSize as string)
+        debugLog ("Slices=" + sliceCount as string + " xRaysPerSlice=" + (getAxisSampleCount fillBounds[1].y fillBounds[2].y primarySize.y) as string + " yRaysPerSlice=" + (getAxisSampleCount fillBounds[1].x fillBounds[2].x primarySize.x) as string + " secondaryTarget=" + secondaryCountSpinner.value as string)
 
         for sliceIndex = 0 to (sliceCount - 1) while not fillCancelled do
         (
@@ -696,10 +744,10 @@ rollout voxelFillTempleSliceUI "Temple Slice Fill Tool"
         )
 
         updateProgress totalSteps totalSteps created
-        debugLog ("Fill complete. Total=" + created as string + " primary=" + primarySummary as string + " secondary=" + secondarySummary as string + " stored=" + placedLookup.Count as string)
+        debugLog ("Fill complete. Total=" + created as string + " primary=" + primarySummary as string + " secondary=" + secondarySummary as string + " stored=" + placedLookup.count as string)
         debugLog "----- Temple Slice Fill End -----"
 
-        #(created, primarySummary, secondarySummary, placedLookup.Count)
+        #(created, primarySummary, secondarySummary, placedLookup.count)
     )
 
     on pickTemple pressed do
