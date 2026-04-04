@@ -16,11 +16,10 @@ rollout voxelFillTempleSliceUI "Temple Slice Fill Tool"
     button pickPrimaryBrick "Pick Primary Brick"
     button pickSecondaryBrick "Pick Secondary Brick"
 
-    groupBox optionsGroup "Slice Options" width:340 height:112
+    groupBox optionsGroup "Slice Options" width:340 height:88
     spinner secondaryCountSpinner "Secondary Blocks" range:[0,5000,200] type:#integer fieldwidth:70
     spinner supportSearchSpinner "Secondary Attempts x" range:[1,100,24] type:#integer fieldwidth:70
     checkbox centerTemplatePivotCheck "Center Template Pivot" checked:true
-    checkbox alignToSurfaceCheck "Align Boundary Blocks To Surface" checked:true
 
     groupBox debugGroup "Debug" width:340 height:88
     checkbox debugCheck "Listener Debug" checked:true
@@ -446,14 +445,6 @@ rollout voxelFillTempleSliceUI "Temple Slice Fill Tool"
         )
     )
 
-    fn getSurfaceAlignedYaw hitRecord defaultYaw =
-    (
-        local hitNormal = hitRecord[2]
-        local planarNormal = [hitNormal.x, hitNormal.y, 0.0]
-
-        if length planarNormal < 0.0001 then defaultYaw else ((atan2 planarNormal.y planarNormal.x) + 90.0)
-    )
-
     fn logPlacementRejection targetCenter targetBounds rejectionReason =
     (
         if rejectionDebugLogsRemaining > 0 then
@@ -464,10 +455,14 @@ rollout voxelFillTempleSliceUI "Temple Slice Fill Tool"
         )
     )
 
-    fn getPlacementRejectionReason targetBounds raycastTarget templeBounds occupiedCells occupancyOrigin occupancyCellSize placedBounds =
+    fn getPlacementRejectionReason targetBounds raycastTarget templeBounds occupiedCells occupancyOrigin occupancyCellSize placedBounds usePlacementChecks =
     (
-        if boundsTouchOccupied targetBounds occupiedCells occupancyOrigin occupancyCellSize then return #occupied
-        if placementOverlaps targetBounds placedBounds then return #overlap
+        if usePlacementChecks then
+        (
+            if boundsTouchOccupied targetBounds occupiedCells occupancyOrigin occupancyCellSize then return #occupied
+            if placementOverlaps targetBounds placedBounds then return #overlap
+        )
+
         if not (boundsFitInsideMesh targetBounds raycastTarget templeBounds) then return #outside
         #ok
     )
@@ -502,7 +497,8 @@ rollout voxelFillTempleSliceUI "Temple Slice Fill Tool"
     fn tryPlaceBlock sourceTemplate targetCenter yawAngle cornerOffsets raycastTarget templeBounds occupiedCells occupancyOrigin occupancyCellSize placedBounds placedLookup primarySupportBounds isPrimary =
     (
         local targetBounds = getRotatedBoundsFromCenter targetCenter cornerOffsets yawAngle
-        local rejectionReason = getPlacementRejectionReason targetBounds raycastTarget templeBounds occupiedCells occupancyOrigin occupancyCellSize placedBounds
+        local usePlacementChecks = not isPrimary
+        local rejectionReason = getPlacementRejectionReason targetBounds raycastTarget templeBounds occupiedCells occupancyOrigin occupancyCellSize placedBounds usePlacementChecks
 
         if rejectionReason == #ok then
         (
@@ -566,12 +562,6 @@ rollout voxelFillTempleSliceUI "Temple Slice Fill Tool"
         (
             local centerValue = centerValues[index]
             local currentYaw = defaultYaw
-
-            if alignToSurfaceCheck.checked then
-            (
-                if index == 1 then currentYaw = getSurfaceAlignedYaw entryHit defaultYaw
-                if index == centerValues.count then currentYaw = getSurfaceAlignedYaw exitHit defaultYaw
-            )
 
             local targetCenter = buildCenterPoint axisName crossValue centerValue sliceZ
 
@@ -683,10 +673,9 @@ rollout voxelFillTempleSliceUI "Temple Slice Fill Tool"
     (
         local sliceCount = getAxisSampleCount paddedTempleBounds[1].z paddedTempleBounds[2].z primarySize.z
         local xRayCount = getAxisSampleCount paddedTempleBounds[1].y paddedTempleBounds[2].y primarySize.y
-        local yRayCount = getAxisSampleCount paddedTempleBounds[1].x paddedTempleBounds[2].x primarySize.y
         local secondarySteps = secondaryTargetCount * supportSearchSpinner.value
 
-        (sliceCount * (xRayCount + yRayCount)) + secondarySteps
+        (sliceCount * xRayCount) + secondarySteps
     )
 
     fn runTempleSliceFill temple raycastTarget baseTempleBounds fillBounds rayBounds primaryTemplate secondaryTemplate =
@@ -719,7 +708,7 @@ rollout voxelFillTempleSliceUI "Temple Slice Fill Tool"
         debugBounds "Ray bounds" rayBounds
         debugLog ("Internal ray-start padding=" + internalRayStartPadding as string + "m")
         debugLog ("Primary size=" + primarySize as string + " secondary size=" + secondarySize as string + " occupancyCell=" + occupancyCellSize as string)
-        debugLog ("Slices=" + sliceCount as string + " xRaysPerSlice=" + (getAxisSampleCount fillBounds[1].y fillBounds[2].y primarySize.y) as string + " yRaysPerSlice=" + (getAxisSampleCount fillBounds[1].x fillBounds[2].x primarySize.x) as string + " secondaryTarget=" + secondaryCountSpinner.value as string)
+        debugLog ("Slices=" + sliceCount as string + " xRaysPerSlice=" + (getAxisSampleCount fillBounds[1].y fillBounds[2].y primarySize.y) as string + " secondaryTarget=" + secondaryCountSpinner.value as string)
 
         for sliceIndex = 0 to (sliceCount - 1) while not fillCancelled do
         (
@@ -727,10 +716,6 @@ rollout voxelFillTempleSliceUI "Temple Slice Fill Tool"
             local xPassResult = processAxisRays #x fillBounds rayBounds sliceZ primaryTemplate primarySize primaryCornerOffsets 0.0 raycastTarget baseTempleBounds occupiedCells occupancyOrigin occupancyCellSize placedBounds placedLookup primarySupportBounds totalSteps processed created
             processed = xPassResult[1]
             created = xPassResult[2]
-
-            local yPassResult = processAxisRays #y fillBounds rayBounds sliceZ primaryTemplate (getOrientedSize primarySize 90.0) primaryCornerOffsets 90.0 raycastTarget baseTempleBounds occupiedCells occupancyOrigin occupancyCellSize placedBounds placedLookup primarySupportBounds totalSteps processed created
-            processed = yPassResult[1]
-            created = yPassResult[2]
         )
 
         primarySummary = primarySupportBounds.count
