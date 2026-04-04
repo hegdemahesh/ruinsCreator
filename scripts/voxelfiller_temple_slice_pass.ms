@@ -7,14 +7,13 @@ rollout voxelFillTempleSliceUI "Temple Slice Fill Tool"
     local secondaryBrick
     local fillCancelled = false
     local placementDebugLogsRemaining = 0
+    local internalRayStartPadding = 0.03
 
     button pickTemple "Pick Temple Mesh"
     button pickPrimaryBrick "Pick Primary Brick"
     button pickSecondaryBrick "Pick Secondary Brick"
 
-    groupBox optionsGroup "Slice Options" width:340 height:148
-    spinner boundsPaddingSpinner "Bounds Padding" range:[0.0,5.0,100000.0] type:#float fieldwidth:70 scale:0.1
-    spinner rayPaddingSpinner "Ray Start Padding" range:[0.0,10.0,100000.0] type:#float fieldwidth:70 scale:0.1
+    groupBox optionsGroup "Slice Options" width:340 height:112
     spinner secondaryCountSpinner "Secondary Blocks" range:[0,200,5000] type:#integer fieldwidth:70
     spinner supportSearchSpinner "Secondary Attempts x" range:[1,24,100] type:#integer fieldwidth:70
     checkbox centerTemplatePivotCheck "Center Template Pivot" checked:true
@@ -96,6 +95,11 @@ rollout voxelFillTempleSliceUI "Temple Slice Fill Tool"
     (
         local paddingVector = [paddingAmount, paddingAmount, paddingAmount]
         #(boundsValue[1] - paddingVector, boundsValue[2] + paddingVector)
+    )
+
+    fn getRayStartBounds templeBounds =
+    (
+        expandBounds templeBounds internalRayStartPadding
     )
 
     fn getOrientedSize baseSize yawAngle =
@@ -307,11 +311,12 @@ rollout voxelFillTempleSliceUI "Temple Slice Fill Tool"
         while hit != undefined and hitResults.count < maxHits do
         (
             local hitDistance = distance sampleOrigin hit.pos
+            local hitNormal = if isProperty hit #dir then (normalize hit.dir) else (if isProperty hit #norm then (normalize hit.norm) else (-normalizedDir))
             travelledDistance += hitDistance
 
             if travelledDistance > (maxDistance + epsilon) then exit
 
-            append hitResults #(hit.pos, hit.norm, travelledDistance)
+            append hitResults #(hit.pos, hitNormal, travelledDistance)
             sampleOrigin = hit.pos + (normalizedDir * epsilon)
             travelledDistance += epsilon
             hit = intersectRay obj (ray sampleOrigin normalizedDir)
@@ -665,6 +670,7 @@ rollout voxelFillTempleSliceUI "Temple Slice Fill Tool"
         debugBounds "Temple bounds" baseTempleBounds
         debugBounds "Fill bounds" fillBounds
         debugBounds "Ray bounds" rayBounds
+        debugLog ("Internal ray-start padding=" + internalRayStartPadding as string + "m")
         debugLog ("Primary size=" + primarySize as string + " secondary size=" + secondarySize as string + " occupancyCell=" + occupancyCellSize as string)
 
         for sliceIndex = 0 to (sliceCount - 1) while not fillCancelled do
@@ -719,8 +725,8 @@ rollout voxelFillTempleSliceUI "Temple Slice Fill Tool"
         if templeMesh != undefined and primaryBrick != undefined then
         (
             local templeBounds = getTempleBounds templeMesh
-            local paddedTempleBounds = expandBounds templeBounds boundsPaddingSpinner.value
-            local raycastBounds = expandBounds paddedTempleBounds rayPaddingSpinner.value
+            local fillBounds = templeBounds
+            local raycastBounds = getRayStartBounds templeBounds
             local snapshotNode = createTempleSnapshot templeMesh
             local primaryTemplate = createPlacementTemplate primaryBrick "TemplePrimaryTemplate"
             local secondaryTemplate = if secondaryBrick != undefined then createPlacementTemplate secondaryBrick "TempleSecondaryTemplate" else undefined
@@ -739,7 +745,7 @@ rollout voxelFillTempleSliceUI "Temple Slice Fill Tool"
                 runFill.enabled = false
                 resetProgressState "Running slice fill..."
 
-                local fillResult = runTempleSliceFill templeMesh snapshotNode templeBounds paddedTempleBounds raycastBounds primaryTemplate secondaryTemplate
+                local fillResult = runTempleSliceFill templeMesh snapshotNode templeBounds fillBounds raycastBounds primaryTemplate secondaryTemplate
 
                 fillStatus.text = ("Fill complete. Total=" + fillResult[1] as string + " Primary=" + fillResult[2] as string + " Secondary=" + fillResult[3] as string)
 
@@ -757,4 +763,4 @@ rollout voxelFillTempleSliceUI "Temple Slice Fill Tool"
     )
 )
 
-createDialog voxelFillTempleSliceUI width:400 height:470
+createDialog voxelFillTempleSliceUI width:420 height:560
