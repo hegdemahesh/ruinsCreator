@@ -2,6 +2,8 @@
 inputFolder  = @"C:\DB\3dModels\AIModel_groups\"
 outputFolder = @"C:\DB\3dModels\AIModel_objects\"
 
+if doesFileExist outputFolder == false do makeDir outputFolder
+
 fbxFiles = getFiles (inputFolder + "*.fbx")
 format "Found % FBX files.\n" fbxFiles.count
 
@@ -33,12 +35,20 @@ for f in fbxFiles do
     (
         -- Get faces of one element
         local elementFaces = polyOp.getElementsUsingFace obj #{1}
+        local geometryBeforeDetach = for node in geometry collect node
         
         -- Detach element into new object
         polyOp.setFaceSelection obj elementFaces
         polyOp.detachFaces obj elementFaces delete:true asNode:true
         
-        local newObj = selection[1]
+        local newObj = undefined
+        for node in geometry where (findItem geometryBeforeDetach node) == 0 do
+        (
+            newObj = node
+            exit
+        )
+        
+        if newObj == undefined and selection.count > 0 do newObj = selection[1]
         
         if isValidNode newObj then
         (
@@ -59,6 +69,7 @@ for f in fbxFiles do
             
             -- Export FBX
             local outFile = outputFolder + newObj.name + ".fbx"
+            select newObj
             try(exportFile outFile #noPrompt selectedOnly:true using:FBXEXP) catch()
             
             format "Exported: %\n" newObj.name

@@ -1,6 +1,8 @@
 -- Input and output folders
-inputFolder  = @"C:\DB\3dModels\AIModel_groups\"
-outputFolder = @"C:\DB\3dModels\AIModel_objects\"
+inputFolder  = @"D:\shared\3dModels\groups\"
+outputFolder = @"D:\shared\3dModels\objects\"
+
+if doesFileExist outputFolder == false do makeDir outputFolder
 
 fbxFiles = getFiles (inputFolder + "*.fbx")
 format "Found % FBX files.\n" fbxFiles.count
@@ -29,22 +31,23 @@ for f in fbxFiles do
     
     local counter = 1
     
-    -- Detach all elements at once
-    local numFaces = polyOp.getNumFaces obj
-    local allFaces = #{1..numFaces}
-    local processed = #{}
-    
-    while (allFaces - processed).count > 0 do
+    while (polyOp.getNumFaces obj) > 0 do
     (
-        -- Pick one unprocessed face
-        local firstFace = (allFaces - processed)[1]
-        local elementFaces = polyOp.getElementsUsingFace obj #{firstFace}
-        processed += elementFaces
+        local elementFaces = polyOp.getElementsUsingFace obj #{1}
+        local geometryBeforeDetach = for node in geometry collect node
         
         -- Detach into new node
         polyOp.setFaceSelection obj elementFaces
         polyOp.detachFaces obj elementFaces delete:true asNode:true
-        local newObj = selection[1]
+        
+        local newObj = undefined
+        for node in geometry where (findItem geometryBeforeDetach node) == 0 do
+        (
+            newObj = node
+            exit
+        )
+        
+        if newObj == undefined and selection.count > 0 do newObj = selection[1]
         
         if isValidNode newObj then
         (
@@ -65,6 +68,7 @@ for f in fbxFiles do
             
             -- Export FBX
             local outFile = outputFolder + newObj.name + ".fbx"
+            select newObj
             try(exportFile outFile #noPrompt selectedOnly:true using:FBXEXP) catch()
             
             format "Exported: %\n" newObj.name
