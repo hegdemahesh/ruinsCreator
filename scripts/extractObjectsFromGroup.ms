@@ -1,6 +1,6 @@
 -- Input and output folders
-inputFolder  = @"D:\shared\3dModels\groups\"
-outputFolder = @"D:\shared\3dModels\objects\"
+inputFolder  = @"C:\DB\3dModels\AIModel_groups\"
+outputFolder = @"C:\DB\3dModels\AIModel_objects\"
 
 if doesFileExist outputFolder == false do makeDir outputFolder
 
@@ -33,6 +33,7 @@ for f in fbxFiles do
     
     while (isValidNode obj and (polyOp.getNumFaces obj) > 0) do
     (
+        -- Get faces of one element
         local faceCountBeforeDetach = polyOp.getNumFaces obj
         local elementFaces = polyOp.getElementsUsingFace obj #{1}
 
@@ -44,7 +45,7 @@ for f in fbxFiles do
 
         local geometryBeforeDetach = for node in geometry collect node
         
-        -- Detach into new node
+        -- Detach element into new object
         polyOp.setFaceSelection obj elementFaces
         polyOp.detachFaces obj elementFaces delete:true asNode:true
         
