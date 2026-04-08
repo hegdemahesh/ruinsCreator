@@ -51,25 +51,23 @@ for f in fbxFiles do
         
         if isValidNode newObj then
         (
-            -- Pivot to bottom center
-            local bb = nodeGetBoundingBox newObj newObj.transform
+            -- Pivot to the detached mesh bottom-center in world space
+            local bb = nodeGetBoundingBox newObj (matrix3 1)
             local minPt = bb[1]
             local maxPt = bb[2]
-            local centerX = (minPt.x + maxPt.x)/2
-            local centerY = (minPt.y + maxPt.y)/2
-            local bottomZ = minPt.z
-            in coordsys local newObj.pivot = [centerX, centerY, bottomZ]
+            local bottomCenter = point3 ((minPt.x + maxPt.x) / 2.0) ((minPt.y + maxPt.y) / 2.0) minPt.z
+            in coordsys world (newObj.pivot = bottomCenter)
             
             -- Move object so pivot is at world origin
             newObj.position = [0,0,0]
             
             -- Rename
-            newObj.name = fileNameOnly + "_object" + formattedPrint counter format:"02d"
+            newObj.name = fileNameOnly + "_object" + (formattedPrint counter format:"02d")
             
             -- Export FBX
             local outFile = outputFolder + newObj.name + ".fbx"
             select newObj
-            try(exportFile outFile #noPrompt selectedOnly:true using:FBXEXP) catch()
+            try (exportFile outFile #noPrompt selectedOnly:true using:FBXEXP) catch ()
             
             format "Exported: %\n" newObj.name
             counter += 1
