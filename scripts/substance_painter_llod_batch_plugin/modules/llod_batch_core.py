@@ -40,7 +40,8 @@ EXPORT_FOLDER = "D:\\shared\\3dModels\\PainterExports"
 SMART_MATERIAL_CONTEXT = ""
 EXPORT_PRESET_CONTEXT = ""
 EXPORT_PRESET_NAME = "PBR Metallic Roughness_copy"
-PLUGIN_VERSION = "2026-04-09.11"
+PLUGIN_VERSION = "2026-04-09.12"
+ENABLE_JS_BAKE_TRIGGER = False
 
 SIZE_TO_RESOLUTION = {
     "512": 512,
@@ -449,9 +450,14 @@ class LlodBatchRunner:
 
         self.configure_bake_settings(job)
 
-        if self.bake_mesh_maps_via_js():
+        if ENABLE_JS_BAKE_TRIGGER and self.bake_mesh_maps_via_js():
             self.wait_until_project_idle("bake mesh maps via JavaScript", timeout_seconds=600.0)
             return
+
+        if not ENABLE_JS_BAKE_TRIGGER:
+            self.logger.log(
+                "Skipping JavaScript bake trigger because it can open the interactive Bake Mesh dialog in Painter 9.1.2."
+            )
 
         bake_async_fn = getattr(baking_module, "bake_async", None)
         bake_selected_fn = getattr(baking_module, "bake_selected_textures_async", None)
@@ -480,6 +486,9 @@ class LlodBatchRunner:
         self.wait_until_project_idle("bake mesh maps", timeout_seconds=600.0)
 
     def bake_mesh_maps_via_js(self) -> bool:
+        if not ENABLE_JS_BAKE_TRIGGER:
+            return False
+
         if not self.has_js_bridge():
             return False
 
