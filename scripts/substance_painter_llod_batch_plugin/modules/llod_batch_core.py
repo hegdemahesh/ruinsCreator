@@ -11,6 +11,11 @@ import substance_painter.resource
 import substance_painter.textureset
 
 try:
+    import substance_painter.application
+except ImportError:
+    pass
+
+try:
     import substance_painter.baking
 except ImportError:
     pass
@@ -28,7 +33,7 @@ EXPORT_FOLDER = "D:\\shared\\3dModels\\PainterExports"
 SMART_MATERIAL_CONTEXT = ""
 EXPORT_PRESET_CONTEXT = ""
 EXPORT_PRESET_NAME = "PBR Metallic Roughness_copy"
-PLUGIN_VERSION = "2026-04-09.2"
+PLUGIN_VERSION = "2026-04-09.3"
 
 SIZE_TO_RESOLUTION = {
     "512": 512,
@@ -88,6 +93,8 @@ class LlodBatchRunner:
         self.logger = logger or BatchLogger()
 
     def run_batch(self) -> None:
+        self.log_painter_runtime()
+
         if not os.path.isdir(self.low_poly_folder):
             raise RuntimeError(f"Low poly folder does not exist: {self.low_poly_folder}")
         if not os.path.isdir(self.high_poly_folder):
@@ -111,6 +118,28 @@ class LlodBatchRunner:
                 self.logger.log(f"Completed job: {job.export_stem}")
             except Exception as exc:
                 self.logger.log(f"ERROR: Job failed for {job.export_stem}: {exc}")
+
+    def log_painter_runtime(self) -> None:
+        application_module = getattr(sp, "application", None)
+        painter_version = "unknown"
+
+        if application_module is not None:
+            version_function = getattr(application_module, "version", None)
+            if callable(version_function):
+                try:
+                    painter_version = str(version_function())
+                except Exception:
+                    painter_version = "unknown"
+
+        self.logger.log(
+            "Painter runtime: version={0}, has_layerstack={1}, has_list_layer_stack_resources={2}, has_update_layer_stack_resource={3}, has_js={4}".format(
+                painter_version,
+                hasattr(sp, "layerstack"),
+                hasattr(sp.resource, "list_layer_stack_resources"),
+                hasattr(sp.resource, "update_layer_stack_resource"),
+                hasattr(sp, "js"),
+            )
+        )
 
     def list_jobs(self, low_poly_folder: str) -> List[JobSpec]:
         jobs: List[JobSpec] = []
@@ -439,20 +468,176 @@ class LlodBatchRunner:
         self.logger.log(f"Applying smart material resource {resource_url}")
 
         layerstack_module = getattr(sp, "layerstack", None)
-        if layerstack_module is None:
-            raise RuntimeError("substance_painter.layerstack is not available in this Painter version.")
+        if layerstack_module is not None:
+            with layerstack_module.ScopedModification(f"Apply {material_tag} smart material"):
+                for texture_set in sp.textureset.all_texture_sets():
+                    for stack in texture_set.all_stacks():
+                        fill_layer = self.create_fill_layer(stack)
+                        if fill_layer is None:
+                            raise RuntimeError(f"Could not create a fill layer for stack {stack}")
+                        if not self.assign_resource_to_layer(fill_layer, resource):
+                            raise RuntimeError(
+                                "Painter API could not assign the smart material resource to the fill layer. "
+                                "This usually means the layer assignment call differs in your Painter version."
+                            )
+            return
 
-        with layerstack_module.ScopedModification(f"Apply {material_tag} smart material"):
-            for texture_set in sp.textureset.all_texture_sets():
-                for stack in texture_set.all_stacks():
-                    fill_layer = self.create_fill_layer(stack)
-                    if fill_layer is None:
-                        raise RuntimeError(f"Could not create a fill layer for stack {stack}")
-                    if not self.assign_resource_to_layer(fill_layer, resource):
-                        raise RuntimeError(
-                            "Painter API could not assign the smart material resource to the fill layer. "
-                            "This usually means the layer assignment call differs in your Painter version."
-                        )
+        if self.apply_smart_material_via_resource_api(resource):
+            return
+
+        raise RuntimeError(
+            "Smart material application is not supported by the Python API exposed in this Painter version. "
+            "The project was created and baked, but no compatible material-assignment API was found."
+        )
+
+    def apply_smart_material_via_resource_api(self, resource) -> bool:
+        list_function = getattr(sp.resource, "list_layer_stack_resources", None)
+        update_function = getattr(sp.resource, "update_layer_stack_resource", None)
+
+        if list_function is None or update_function is None:
+            self.logger.log(
+                "WARNING: Older Painter fallback is unavailable because list/update layer-stack resource APIs are missing."
+            )
+            return False
+
+        any_stack_updated = False
+
+        for texture_set in sp.textureset.all_texture_sets():
+            for stack in texture_set.all_stacks():
+                stack_resources = self.list_stack_resources(list_function, stack, texture_set)
+                self.logger.log(
+                    "Fallback resource API: stack={0}, discovered_resources={1}".format(
+                        stack,
+                        len(stack_resources),
+                    )
+                )
+
+                if not stack_resources:
+                    continue
+
+                for current_resource in stack_resources:
+                    if not self.is_material_like_resource(current_resource):
+                        continue
+                    if self.try_update_stack_resource(update_function, stack, texture_set, current_resource, resource):
+                        any_stack_updated = True
+
+        if any_stack_updated:
+            self.logger.log("Applied smart material through the older resource replacement API.")
+            self.wait_until_project_idle("apply smart material")
+            return True
+
+        self.logger.log(
+            "WARNING: Older Painter resource API was found, but no material-like stack resources could be replaced."
+        )
+        return False
+
+    def list_stack_resources(self, list_function, stack, texture_set):
+        variants = (
+            (stack,),
+            (texture_set,),
+            tuple(),
+        )
+
+        for arguments in variants:
+            try:
+                result = list_function(*arguments)
+            except TypeError:
+                continue
+            except Exception as exc:
+                self.logger.log(f"WARNING: list_layer_stack_resources failed for args={len(arguments)}: {exc}")
+                continue
+
+            resources = self.extract_resources_from_listing(result)
+            if resources:
+                return resources
+
+        return []
+
+    def extract_resources_from_listing(self, result):
+        if result is None:
+            return []
+
+        if isinstance(result, dict):
+            values = []
+            for item in result.values():
+                if isinstance(item, (list, tuple, set)):
+                    values.extend(item)
+                else:
+                    values.append(item)
+            return [value for value in values if self.looks_like_resource(value)]
+
+        if isinstance(result, (list, tuple, set)):
+            resources = []
+            for item in result:
+                if self.looks_like_resource(item):
+                    resources.append(item)
+                elif isinstance(item, (list, tuple, set)):
+                    resources.extend(value for value in item if self.looks_like_resource(value))
+                elif isinstance(item, dict):
+                    resources.extend(
+                        value for value in item.values() if self.looks_like_resource(value)
+                    )
+            return resources
+
+        if self.looks_like_resource(result):
+            return [result]
+
+        return []
+
+    def looks_like_resource(self, value) -> bool:
+        return hasattr(value, "identifier") and callable(getattr(value, "identifier"))
+
+    def is_material_like_resource(self, resource) -> bool:
+        try:
+            resource_type = resource.type()
+            if resource_type is not None and "material" in str(resource_type).lower():
+                return True
+        except Exception:
+            pass
+
+        try:
+            category = resource.category()
+            if category is not None and "material" in str(category).lower():
+                return True
+        except Exception:
+            pass
+
+        try:
+            usages = resource.usages()
+            if usages is not None and "material" in str(usages).lower():
+                return True
+        except Exception:
+            pass
+
+        return False
+
+    def try_update_stack_resource(self, update_function, stack, texture_set, current_resource, new_resource) -> bool:
+        call_variants = (
+            (current_resource, new_resource),
+            (stack, current_resource, new_resource),
+            (texture_set, current_resource, new_resource),
+            (stack, new_resource),
+            (texture_set, new_resource),
+        )
+
+        for arguments in call_variants:
+            try:
+                update_function(*arguments)
+                self.logger.log(
+                    "Fallback resource update succeeded with args={0}".format(len(arguments))
+                )
+                return True
+            except TypeError:
+                continue
+            except Exception as exc:
+                self.logger.log(
+                    "WARNING: update_layer_stack_resource failed for args={0}: {1}".format(
+                        len(arguments),
+                        exc,
+                    )
+                )
+
+        return False
 
     def create_fill_layer(self, stack):
         layerstack_module = sp.layerstack
