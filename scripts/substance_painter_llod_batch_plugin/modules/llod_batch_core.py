@@ -1,5 +1,7 @@
 import os
 import re
+import inspect
+import json
 import time
 from dataclasses import dataclass
 from typing import Callable, List, Optional
@@ -25,6 +27,11 @@ try:
 except ImportError:
     pass
 
+try:
+    import substance_painter.properties
+except ImportError:
+    pass
+
 
 LOW_POLY_FOLDER = "D:\\shared\\3dModels\\AImodels06"
 HIGH_POLY_FOLDER = "D:\\shared\\3dModels\\AImodels04"
@@ -33,7 +40,7 @@ EXPORT_FOLDER = "D:\\shared\\3dModels\\PainterExports"
 SMART_MATERIAL_CONTEXT = ""
 EXPORT_PRESET_CONTEXT = ""
 EXPORT_PRESET_NAME = "PBR Metallic Roughness_copy"
-PLUGIN_VERSION = "2026-04-09.3"
+PLUGIN_VERSION = "2026-04-09.5"
 
 SIZE_TO_RESOLUTION = {
     "512": 512,
@@ -79,6 +86,10 @@ class BatchLogger:
             self._sink(line)
 
 
+class UnsupportedPainterFeatureError(RuntimeError):
+    pass
+
+
 class LlodBatchRunner:
     def __init__(
         self,
@@ -91,6 +102,7 @@ class LlodBatchRunner:
         self.high_poly_folder = high_poly_folder
         self.export_folder = export_folder
         self.logger = logger or BatchLogger()
+        self._baking_runtime_logged = False
 
     def run_batch(self) -> None:
         self.log_painter_runtime()
@@ -113,9 +125,16 @@ class LlodBatchRunner:
                 self.create_project_for_job(job)
                 self.set_project_resolution(job.resolution)
                 self.bake_mesh_maps(job)
-                self.apply_smart_material_to_project(job.material_tag)
+                smart_material_applied = False
+                try:
+                    smart_material_applied = self.apply_smart_material_to_project(job.material_tag)
+                except UnsupportedPainterFeatureError as exc:
+                    self.logger.log(f"WARNING: {exc}")
                 self.export_textures(job)
-                self.logger.log(f"Completed job: {job.export_stem}")
+                if smart_material_applied:
+                    self.logger.log(f"Completed job: {job.export_stem}")
+                else:
+                    self.logger.log(f"Completed job without smart material assignment: {job.export_stem}")
             except Exception as exc:
                 self.logger.log(f"ERROR: Job failed for {job.export_stem}: {exc}")
 
@@ -366,50 +385,353 @@ class LlodBatchRunner:
         if baking_module is None:
             return
 
-        settings_object = None
-        for class_name in ("Settings", "BakingSettings", "Parameters"):
+        self.log_baking_runtime(baking_module)
+
+        apply_settings_functions = self.get_bake_settings_functions(baking_module)
+        if not apply_settings_functions:
+            if self.configure_bake_settings_via_js(job):
+                self.logger.log(f"Configured bake settings with HLOD mesh through JavaScript API: {job.high_poly_path}")
+                return
+
+            self.log_js_baking_capabilities(job.high_poly_path)
+            self.logger.log(
+                "WARNING: No confirmed bake-settings setter API is exposed in this Painter version; "
+                "the high-definition mesh path could not be assigned automatically, so Painter will use its current bake settings."
+            )
+            return
+
+        any_applied = False
+
+        for texture_set in sp.textureset.all_texture_sets():
+            for stack in texture_set.all_stacks():
+                settings_object = self.build_bake_settings_object(baking_module, texture_set, stack)
+                if settings_object is None:
+                    continue
+
+                high_poly_assigned = self.assign_high_poly_to_settings(settings_object, job.high_poly_path)
+                resolution_assigned = self.assign_resolution_to_settings(settings_object, job.resolution)
+
+                self.logger.log(
+                    "Bake settings prepared for stack={0}: settings_type={1}, high_poly_assigned={2}, resolution_assigned={3}".format(
+                        stack,
+                        type(settings_object).__name__,
+                        high_poly_assigned,
+                        resolution_assigned,
+                    )
+                )
+
+                if self.apply_bake_settings(apply_settings_functions, settings_object, texture_set, stack):
+                    any_applied = True
+
+        if any_applied:
+            self.logger.log(f"Configured bake settings with HLOD mesh: {job.high_poly_path}")
+            return
+
+        fallback_dict = self.build_bake_settings_dict(job.high_poly_path, job.resolution)
+        if self.apply_bake_settings(apply_settings_functions, fallback_dict, None, None):
+            self.logger.log(f"Configured bake settings with HLOD mesh through dict fallback: {job.high_poly_path}")
+            return
+
+        self.logger.log(
+            "WARNING: Could not push bake settings into Painter 9.1.2. The high-definition mesh is still not being set."
+        )
+
+    def log_baking_runtime(self, baking_module) -> None:
+        if self._baking_runtime_logged:
+            return
+
+        self._baking_runtime_logged = True
+
+        available_members = [name for name in dir(baking_module) if not name.startswith("_")]
+        self.logger.log(f"Baking runtime members: {', '.join(sorted(available_members))}")
+
+        for function_name in (
+            "set_common_baking_parameters",
+            "set_linked_group_common_parameters",
+            "get_link_group_common_parameters",
+            "set_linked_group",
+            "get_link_group",
+            "get_linked_texture_sets_common_parameters",
+            "get_linked_texture_sets",
+            "bake_selected_textures_async",
+            "bake_async",
+        ):
+            function = getattr(baking_module, function_name, None)
+            if function is None:
+                continue
+            try:
+                signature = str(inspect.signature(function))
+            except Exception:
+                signature = "<signature unavailable>"
+            self.logger.log(f"Baking function {function_name}{signature}")
+
+        for class_name in ("Settings", "BakingSettings", "Parameters", "BakingParameters"):
             settings_class = getattr(baking_module, class_name, None)
             if settings_class is None:
                 continue
-            try:
-                settings_object = settings_class()
-                break
-            except Exception:
-                continue
+            self.logger.log(f"Baking settings class available: {class_name}")
 
-        if settings_object is None:
-            self.logger.log("WARNING: Could not construct bake settings object; using current Painter bake settings.")
-            return
+        properties_module = getattr(sp, "properties", None)
+        if properties_module is not None:
+            property_members = [name for name in dir(properties_module) if not name.startswith("_")]
+            self.logger.log(f"Properties runtime members: {', '.join(sorted(property_members))}")
+
+    def get_bake_settings_functions(self, baking_module):
+        functions = []
+        for function_name in ("set_common_baking_parameters",):
+            function = getattr(baking_module, function_name, None)
+            if callable(function):
+                functions.append((function_name, function))
+        return functions
+
+    def build_bake_settings_object(self, baking_module, texture_set, stack):
+        constructor_variants = []
+
+        for class_name in ("Settings", "BakingSettings", "Parameters", "BakingParameters"):
+            settings_class = getattr(baking_module, class_name, None)
+            if settings_class is None:
+                continue
+            constructor_variants.extend(
+                [
+                    (class_name, settings_class, tuple()),
+                    (class_name, settings_class, (stack,)),
+                    (class_name, settings_class, (texture_set,)),
+                    (class_name, settings_class, (texture_set, stack)),
+                    (class_name, settings_class, (stack, texture_set)),
+                ]
+            )
+
+        for class_name, settings_class, arguments in constructor_variants:
+            try:
+                settings_object = settings_class(*arguments)
+                self.logger.log(
+                    "Constructed bake settings object: class={0}, args={1}".format(
+                        class_name,
+                        len(arguments),
+                    )
+                )
+                return settings_object
+            except TypeError:
+                continue
+            except Exception as exc:
+                self.logger.log(
+                    "WARNING: Failed to construct bake settings class={0} args={1}: {2}".format(
+                        class_name,
+                        len(arguments),
+                        exc,
+                    )
+                )
+
+        self.logger.log(f"WARNING: Could not construct bake settings object for stack {stack}.")
+        return None
+
+    def build_bake_settings_dict(self, high_poly_path: str, resolution: int) -> dict:
+        return {
+            "high_definition_meshes": [high_poly_path],
+            "highpoly_mesh_path": high_poly_path,
+            "high_poly_mesh_path": high_poly_path,
+            "secondary_mesh_path": high_poly_path,
+            "reference_mesh_path": high_poly_path,
+            "output_size": resolution,
+            "resolution": resolution,
+            "size": resolution,
+        }
+
+    def assign_high_poly_to_settings(self, settings_object, high_poly_path: str) -> bool:
+        assigned = False
 
         for attribute_name in (
             "high_definition_meshes",
+            "high_definition_mesh_paths",
             "highpoly_mesh_path",
             "high_poly_mesh_path",
+            "high_poly_meshes",
             "secondary_mesh_path",
             "reference_mesh_path",
         ):
-            if hasattr(settings_object, attribute_name):
+            if not hasattr(settings_object, attribute_name):
+                continue
+            try:
                 current_value = getattr(settings_object, attribute_name)
-                setattr(settings_object, attribute_name, [job.high_poly_path] if isinstance(current_value, list) else job.high_poly_path)
-                break
+                new_value = [high_poly_path] if isinstance(current_value, list) else high_poly_path
+                setattr(settings_object, attribute_name, new_value)
+                assigned = True
+            except Exception as exc:
+                self.logger.log(f"WARNING: Could not set bake attribute {attribute_name}: {exc}")
+
+        nested_names = ("common_parameters", "common", "parameters")
+        for nested_name in nested_names:
+            nested_value = getattr(settings_object, nested_name, None)
+            if nested_value is not None and nested_value is not settings_object:
+                if self.assign_high_poly_to_settings(nested_value, high_poly_path):
+                    assigned = True
+
+        return assigned
+
+    def assign_resolution_to_settings(self, settings_object, resolution: int) -> bool:
+        assigned = False
 
         for attribute_name in ("output_size", "resolution", "size"):
-            if hasattr(settings_object, attribute_name):
-                try:
-                    setattr(settings_object, attribute_name, job.resolution)
-                except Exception:
-                    pass
-
-        apply_settings_fn = getattr(baking_module, "set_common_baking_parameters", None)
-        if apply_settings_fn is not None:
+            if not hasattr(settings_object, attribute_name):
+                continue
             try:
-                apply_settings_fn(settings_object)
-                self.logger.log(f"Configured bake settings with HLOD mesh: {job.high_poly_path}")
-                return
+                setattr(settings_object, attribute_name, resolution)
+                assigned = True
             except Exception as exc:
-                self.logger.log(f"WARNING: Could not push bake settings through set_common_baking_parameters: {exc}")
+                self.logger.log(f"WARNING: Could not set bake resolution attribute {attribute_name}: {exc}")
 
-        self.logger.log("WARNING: Bake settings object was created but no setter API was found; using current Painter bake settings.")
+        nested_names = ("common_parameters", "common", "parameters")
+        for nested_name in nested_names:
+            nested_value = getattr(settings_object, nested_name, None)
+            if nested_value is not None and nested_value is not settings_object:
+                if self.assign_resolution_to_settings(nested_value, resolution):
+                    assigned = True
+
+        return assigned
+
+    def apply_bake_settings(self, apply_settings_functions, settings_object, texture_set, stack) -> bool:
+        for function_name, function in apply_settings_functions:
+            call_variants = [
+                (settings_object,),
+            ]
+
+            if stack is not None:
+                call_variants.extend(
+                    [
+                        (stack, settings_object),
+                        (settings_object, stack),
+                    ]
+                )
+
+            if texture_set is not None:
+                call_variants.extend(
+                    [
+                        (texture_set, settings_object),
+                        (settings_object, texture_set),
+                        ([texture_set], settings_object),
+                        (settings_object, [texture_set]),
+                    ]
+                )
+
+            if texture_set is not None and stack is not None:
+                call_variants.extend(
+                    [
+                        (texture_set, stack, settings_object),
+                        (stack, texture_set, settings_object),
+                        (settings_object, texture_set, stack),
+                        ([texture_set], stack, settings_object),
+                    ]
+                )
+
+            for arguments in call_variants:
+                try:
+                    function(*arguments)
+                    self.logger.log(
+                        "Applied bake settings through {0} with arg_count={1}".format(
+                            function_name,
+                            len(arguments),
+                        )
+                    )
+                    return True
+                except TypeError:
+                    continue
+                except Exception as exc:
+                    self.logger.log(
+                        "WARNING: {0} failed with arg_count={1}: {2}".format(
+                            function_name,
+                            len(arguments),
+                            exc,
+                        )
+                    )
+
+        return False
+
+    def log_js_baking_capabilities(self, high_poly_path: str) -> None:
+        if not self.has_js_bridge():
+            self.logger.log("WARNING: Painter JavaScript bridge is not available for bake diagnostics.")
+            return
+
+        probes = {
+            "alg_baking_keys": "JSON.stringify((alg.baking && Object.keys(alg.baking).sort()) || [])",
+            "alg_texturesets_keys": "JSON.stringify((alg.texturesets && Object.keys(alg.texturesets).sort()) || [])",
+            "high_poly_path_echo": f"JSON.stringify({high_poly_path!r})",
+        }
+
+        self.logger.log(f"Probing Painter JavaScript baking API. high_poly={high_poly_path}")
+
+        for label, script in probes.items():
+            try:
+                result = self.evaluate_js(script)
+                self.logger.log(f"JS bake probe {label}: {result}")
+            except Exception as exc:
+                self.logger.log(f"WARNING: JS bake probe {label} failed: {exc}")
+
+    def has_js_bridge(self) -> bool:
+        js_module = getattr(sp, "js", None)
+        evaluate = getattr(js_module, "evaluate", None) if js_module is not None else None
+        return callable(evaluate)
+
+    def evaluate_js(self, script: str):
+        js_module = getattr(sp, "js", None)
+        evaluate = getattr(js_module, "evaluate", None) if js_module is not None else None
+        if not callable(evaluate):
+            raise RuntimeError("Painter JavaScript bridge is not available.")
+        return evaluate(script)
+
+    def configure_bake_settings_via_js(self, job: JobSpec) -> bool:
+        if not self.has_js_bridge():
+            return False
+
+        high_poly_json = json.dumps(job.high_poly_path)
+        resolution_json = json.dumps(job.resolution)
+
+        attempts = [
+            (
+                "selectHighDefinitionMeshes(list)",
+                (
+                    "alg.baking.selectHighDefinitionMeshes([" + high_poly_json + "]);"
+                    "JSON.stringify({ok:true});"
+                ),
+            ),
+            (
+                "selectHighDefinitionMeshes(path)",
+                (
+                    "alg.baking.selectHighDefinitionMeshes(" + high_poly_json + ");"
+                    "JSON.stringify({ok:true});"
+                ),
+            ),
+            (
+                "setCommonBakingParameters(object)",
+                (
+                    "var params = alg.baking.commonBakingParameters();"
+                    "if (params && typeof params === 'object') {"
+                    "  params.highDefinitionMeshes = [" + high_poly_json + "];"
+                    "  params.highDefinitionMeshPaths = [" + high_poly_json + "];"
+                    "  params.highPolyMeshes = [" + high_poly_json + "];"
+                    "  params.highPolyMeshPaths = [" + high_poly_json + "];"
+                    "  params.outputSize = " + resolution_json + ";"
+                    "  params.resolution = " + resolution_json + ";"
+                    "  alg.baking.setCommonBakingParameters(params);"
+                    "  JSON.stringify({ok:true, keys:Object.keys(params).sort()});"
+                    "} else {"
+                    "  JSON.stringify({ok:false, reason:'no-params-object'});"
+                    "}"
+                ),
+            ),
+        ]
+
+        any_success = False
+
+        for label, script in attempts:
+            try:
+                result = self.evaluate_js(script)
+                self.logger.log(f"JS bake apply {label}: {result}")
+                if result and '"ok":true' in str(result).lower():
+                    any_success = True
+            except Exception as exc:
+                self.logger.log(f"WARNING: JS bake apply {label} failed: {exc}")
+
+        return any_success
 
     def find_smart_material_resource(self, material_tag: str):
         query_names = [material_tag, material_tag.lower(), material_tag.capitalize()]
@@ -459,7 +781,7 @@ class LlodBatchRunner:
 
         return None
 
-    def apply_smart_material_to_project(self, material_tag: str) -> None:
+    def apply_smart_material_to_project(self, material_tag: str) -> bool:
         resource = self.find_smart_material_resource(material_tag)
         if resource is None:
             raise RuntimeError(f"Could not find a smart material resource named '{material_tag}' in Painter resources.")
@@ -480,22 +802,21 @@ class LlodBatchRunner:
                                 "Painter API could not assign the smart material resource to the fill layer. "
                                 "This usually means the layer assignment call differs in your Painter version."
                             )
-            return
+            return True
 
         if self.apply_smart_material_via_resource_api(resource):
-            return
+            return True
 
         self.log_js_material_capabilities(resource_url)
 
-        raise RuntimeError(
+        raise UnsupportedPainterFeatureError(
             "Smart material application is not supported by the Python API exposed in this Painter version. "
-            "The project was created and baked, but no compatible material-assignment API was found."
+            "The project was created and baked, but no compatible material-assignment API was found. "
+            "Continuing without smart material assignment so textures can still be exported."
         )
 
     def log_js_material_capabilities(self, resource_url: str) -> None:
-        js_module = getattr(sp, "js", None)
-        evaluate = getattr(js_module, "evaluate", None) if js_module is not None else None
-        if not callable(evaluate):
+        if not self.has_js_bridge():
             self.logger.log("WARNING: Painter JavaScript bridge is not available for further smart material diagnostics.")
             return
 
@@ -511,7 +832,7 @@ class LlodBatchRunner:
 
         for label, script in probes.items():
             try:
-                result = evaluate(script)
+                result = self.evaluate_js(script)
                 self.logger.log(f"JS probe {label}: {result}")
             except Exception as exc:
                 self.logger.log(f"WARNING: JS probe {label} failed: {exc}")
@@ -707,52 +1028,106 @@ class LlodBatchRunner:
         return False
 
     def build_export_preset_url(self) -> str:
+        candidate_names = [EXPORT_PRESET_NAME]
+        if EXPORT_PRESET_NAME.lower().endswith("_copy"):
+            candidate_names.append(EXPORT_PRESET_NAME[:-5])
+        if "PBR Metallic Roughness" not in candidate_names:
+            candidate_names.append("PBR Metallic Roughness")
+
         if EXPORT_PRESET_CONTEXT:
-            return sp.resource.ResourceID(
-                context=EXPORT_PRESET_CONTEXT,
-                name=EXPORT_PRESET_NAME,
-            ).url()
+            for preset_name in candidate_names:
+                return sp.resource.ResourceID(
+                    context=EXPORT_PRESET_CONTEXT,
+                    name=preset_name,
+                ).url()
 
         seen_urls = set()
 
-        try:
-            resources = sp.resource.search(EXPORT_PRESET_NAME)
-        except Exception as exc:
-            raise RuntimeError(f"Could not search export presets for '{EXPORT_PRESET_NAME}': {exc}")
-
-        for resource in resources:
+        for preset_name in candidate_names:
             try:
-                identifier = resource.identifier()
-                url = identifier.url()
-            except Exception:
+                resources = sp.resource.search(preset_name)
+            except Exception as exc:
+                self.logger.log(f"WARNING: Could not search export presets for '{preset_name}': {exc}")
                 continue
 
-            if url in seen_urls:
-                continue
-            seen_urls.add(url)
-
-            try:
-                resource_name = resource.gui_name().lower()
-            except Exception:
-                resource_name = ""
-
-            if resource_name != EXPORT_PRESET_NAME.lower():
-                continue
-
-            try:
-                resource_type = resource.type()
-                if resource_type is not None and "export" not in str(resource_type).lower() and "preset" not in str(resource_type).lower():
+            for resource in resources:
+                try:
+                    identifier = resource.identifier()
+                    url = identifier.url()
+                except Exception:
                     continue
-            except Exception:
-                pass
 
-            self.logger.log(f"Using export preset resource {url}")
-            return url
+                if url in seen_urls:
+                    continue
+                seen_urls.add(url)
+
+                try:
+                    resource_name = resource.gui_name().lower()
+                except Exception:
+                    resource_name = ""
+
+                if resource_name != preset_name.lower():
+                    continue
+
+                try:
+                    resource_type = resource.type()
+                    if resource_type is not None and "export" not in str(resource_type).lower() and "preset" not in str(resource_type).lower():
+                        continue
+                except Exception:
+                    pass
+
+                self.logger.log(f"Using export preset resource {url}")
+                return url
+
+        for preset_name in candidate_names:
+            if preset_name != "PBR Metallic Roughness":
+                continue
+            try:
+                url = sp.resource.ResourceID(
+                    context="starter_assets",
+                    name=preset_name,
+                ).url()
+                self.logger.log(f"Using built-in Painter export preset {url}")
+                return url
+            except Exception as exc:
+                self.logger.log(f"WARNING: Could not build starter_assets preset '{preset_name}': {exc}")
+
+        current_preset = self.get_current_export_preset_via_js()
+        if current_preset:
+            self.logger.log(f"Using current Painter export preset {current_preset}")
+            return current_preset
 
         raise RuntimeError(
             f"Could not find export preset '{EXPORT_PRESET_NAME}'. "
-            "Set EXPORT_PRESET_NAME to the exact Painter preset name or set EXPORT_PRESET_CONTEXT explicitly."
+            "Set EXPORT_PRESET_NAME to the exact Painter preset name, set EXPORT_PRESET_CONTEXT explicitly, or select a project export preset in Painter before running the batch."
         )
+
+    def get_current_export_preset_via_js(self) -> Optional[str]:
+        if not self.has_js_bridge():
+            return None
+
+        try:
+            result = self.evaluate_js(
+                "JSON.stringify({"
+                "preset:(alg.mapexport && alg.mapexport.getProjectExportPreset) ? alg.mapexport.getProjectExportPreset() : null,"
+                "options:(alg.mapexport && alg.mapexport.getProjectExportOptions) ? alg.mapexport.getProjectExportOptions() : null"
+                "})"
+            )
+            self.logger.log(f"JS export preset probe: {result}")
+        except Exception as exc:
+            self.logger.log(f"WARNING: JS export preset probe failed: {exc}")
+            return None
+
+        try:
+            payload = json.loads(result)
+        except Exception:
+            return None
+
+        preset = payload.get("preset")
+        if isinstance(preset, str) and preset:
+            return preset
+
+        return None
 
     def export_textures(self, job: JobSpec) -> None:
         self.ensure_directory(job.texture_export_folder)
