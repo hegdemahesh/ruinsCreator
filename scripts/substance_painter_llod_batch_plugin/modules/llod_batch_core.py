@@ -26,8 +26,8 @@ HIGH_POLY_FOLDER = "D:\\shared\\3dModels\\AImodels04"
 EXPORT_FOLDER = "D:\\shared\\3dModels\\PainterExports"
 
 SMART_MATERIAL_CONTEXT = ""
-EXPORT_PRESET_CONTEXT = "starter_assets"
-EXPORT_PRESET_NAME = "PBR Metallic Roughness"
+EXPORT_PRESET_CONTEXT = ""
+EXPORT_PRESET_NAME = "PBR Metallic Roughness_copy"
 
 SIZE_TO_RESOLUTION = {
     "512": 512,
@@ -487,10 +487,52 @@ class LlodBatchRunner:
         return False
 
     def build_export_preset_url(self) -> str:
-        return sp.resource.ResourceID(
-            context=EXPORT_PRESET_CONTEXT,
-            name=EXPORT_PRESET_NAME,
-        ).url()
+        if EXPORT_PRESET_CONTEXT:
+            return sp.resource.ResourceID(
+                context=EXPORT_PRESET_CONTEXT,
+                name=EXPORT_PRESET_NAME,
+            ).url()
+
+        seen_urls = set()
+
+        try:
+            resources = sp.resource.search(EXPORT_PRESET_NAME)
+        except Exception as exc:
+            raise RuntimeError(f"Could not search export presets for '{EXPORT_PRESET_NAME}': {exc}")
+
+        for resource in resources:
+            try:
+                identifier = resource.identifier()
+                url = identifier.url()
+            except Exception:
+                continue
+
+            if url in seen_urls:
+                continue
+            seen_urls.add(url)
+
+            try:
+                resource_name = resource.gui_name().lower()
+            except Exception:
+                resource_name = ""
+
+            if resource_name != EXPORT_PRESET_NAME.lower():
+                continue
+
+            try:
+                resource_type = resource.type()
+                if resource_type is not None and "export" not in str(resource_type).lower() and "preset" not in str(resource_type).lower():
+                    continue
+            except Exception:
+                pass
+
+            self.logger.log(f"Using export preset resource {url}")
+            return url
+
+        raise RuntimeError(
+            f"Could not find export preset '{EXPORT_PRESET_NAME}'. "
+            "Set EXPORT_PRESET_NAME to the exact Painter preset name or set EXPORT_PRESET_CONTEXT explicitly."
+        )
 
     def export_textures(self, job: JobSpec) -> None:
         self.ensure_directory(job.texture_export_folder)

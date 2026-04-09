@@ -45,6 +45,14 @@ Edit these constants in [modules/llod_batch_core.py](modules/llod_batch_core.py)
 5. `EXPORT_PRESET_CONTEXT`
 6. `EXPORT_PRESET_NAME`
 
+The current default export preset is configured as:
+
+```text
+PBR Metallic Roughness_copy_copy
+```
+
+If your copied Painter export preset has a slightly different name, update `EXPORT_PRESET_NAME` to match it exactly.
+
 Your smart materials in Painter should match the material tag names exactly:
 
 1. `greyrock`
