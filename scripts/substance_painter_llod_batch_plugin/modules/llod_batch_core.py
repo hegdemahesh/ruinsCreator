@@ -40,7 +40,7 @@ EXPORT_FOLDER = "D:\\shared\\3dModels\\PainterExports"
 SMART_MATERIAL_CONTEXT = ""
 EXPORT_PRESET_CONTEXT = ""
 EXPORT_PRESET_NAME = "PBR Metallic Roughness_copy"
-PLUGIN_VERSION = "2026-04-09.7"
+PLUGIN_VERSION = "2026-04-09.9"
 
 SIZE_TO_RESOLUTION = {
     "512": 512,
@@ -239,12 +239,69 @@ class LlodBatchRunner:
         self.wait_until_project_idle("close current project")
 
     def wait_until_project_idle(self, label: str, timeout_seconds: float = 120.0) -> None:
-        start_time = time.time()
-        while hasattr(sp.project, "is_busy") and sp.project.is_busy():
-            self.process_ui_events()
-            if time.time() - start_time > timeout_seconds:
-                raise TimeoutError(f"Timed out waiting for Painter to finish: {label}")
-            time.sleep(0.1)
+        if not hasattr(sp.project, "is_busy"):
+            return
+
+        try:
+            if not sp.project.is_busy():
+                return
+        except Exception:
+            return
+
+        qt_core = self._qt_core()
+        application = self._qt_application()
+
+        if qt_core is None or application is None:
+            start_time = time.time()
+            while sp.project.is_busy():
+                self.process_ui_events()
+                if time.time() - start_time > timeout_seconds:
+                    raise TimeoutError(f"Timed out waiting for Painter to finish: {label}")
+                time.sleep(0.05)
+            return
+
+        self.logger.log(f"Waiting for Painter to finish: {label}")
+
+        event_loop = qt_core.QEventLoop()
+        poll_timer = qt_core.QTimer()
+        poll_timer.setInterval(50)
+
+        timeout_timer = qt_core.QTimer()
+        timeout_timer.setSingleShot(True)
+
+        state = {"timed_out": False}
+
+        def on_poll() -> None:
+            try:
+                if not sp.project.is_busy():
+                    event_loop.exit(0)
+            except Exception:
+                event_loop.exit(0)
+
+        def on_timeout() -> None:
+            state["timed_out"] = True
+            event_loop.exit(1)
+
+        poll_timer.timeout.connect(on_poll)
+        timeout_timer.timeout.connect(on_timeout)
+
+        poll_timer.start()
+        timeout_timer.start(int(timeout_seconds * 1000))
+
+        exec_method = getattr(event_loop, "exec", None)
+        if exec_method is None:
+            exec_method = getattr(event_loop, "exec_", None)
+        if exec_method is None:
+            raise RuntimeError("Qt event loop does not expose exec/exec_ in this Painter runtime.")
+
+        try:
+            exec_method()
+        finally:
+            poll_timer.stop()
+            timeout_timer.stop()
+
+        if state["timed_out"]:
+            raise TimeoutError(f"Timed out waiting for Painter to finish: {label}")
 
     def process_ui_events(self) -> None:
         application = self._qt_application()
@@ -261,6 +318,19 @@ class LlodBatchRunner:
         try:
             from PySide6 import QtWidgets
             return QtWidgets.QApplication.instance()
+        except Exception:
+            return None
+
+    def _qt_core(self):
+        try:
+            from PySide2 import QtCore
+            return QtCore
+        except Exception:
+            pass
+
+        try:
+            from PySide6 import QtCore
+            return QtCore
         except Exception:
             return None
 
