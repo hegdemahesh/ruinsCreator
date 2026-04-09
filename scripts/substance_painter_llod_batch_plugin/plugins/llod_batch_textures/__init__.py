@@ -22,6 +22,7 @@ if MODULES_PATH not in sys.path:
     sys.path.insert(0, MODULES_PATH)
 
 from llod_batch_core import BatchLogger, EXPORT_FOLDER, HIGH_POLY_FOLDER, LOW_POLY_FOLDER, LlodBatchRunner
+from llod_batch_core import PLUGIN_VERSION
 
 
 WIDGETS = []
@@ -94,7 +95,9 @@ def start_plugin() -> None:
     sp.ui.add_dock_widget(LOG_PANEL, sp.ui.UIMode.Edition)
     WIDGETS.append(LOG_PANEL)
 
-    append_log("[PainterBatch] Plugin loaded.")
+    append_log(f"[PainterBatch] Plugin loaded. version={PLUGIN_VERSION}")
+    append_log(f"[PainterBatch] Plugin root: {PLUGIN_ROOT}")
+    append_log(f"[PainterBatch] Module path: {MODULES_PATH}")
 
 
 def close_plugin() -> None:

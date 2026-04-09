@@ -28,6 +28,7 @@ EXPORT_FOLDER = "D:\\shared\\3dModels\\PainterExports"
 SMART_MATERIAL_CONTEXT = ""
 EXPORT_PRESET_CONTEXT = ""
 EXPORT_PRESET_NAME = "PBR Metallic Roughness_copy"
+PLUGIN_VERSION = "2026-04-09.2"
 
 SIZE_TO_RESOLUTION = {
     "512": 512,
