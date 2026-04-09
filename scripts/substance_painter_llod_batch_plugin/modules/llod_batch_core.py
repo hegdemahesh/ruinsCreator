@@ -203,14 +203,22 @@ class LlodBatchRunner:
     def create_project_for_job(self, job: JobSpec) -> None:
         self.close_current_project()
         settings = self.build_project_settings(job.low_poly_path)
+        settings_dict = self.settings_to_dict(settings)
         self.logger.log(f"Creating project from {job.low_poly_path}")
-        sp.project.create(settings)
+        project_create = getattr(sp.project, "create", None)
+        if project_create is None:
+            raise RuntimeError("substance_painter.project.create is not available in this Painter version.")
+
+        try:
+            project_create(job.low_poly_path, [], "", settings_dict)
+        except TypeError:
+            project_create(settings)
         self.wait_until_project_idle("create project")
 
     def build_project_settings(self, mesh_path: str):
         settings_class = getattr(sp.project, "Settings", None)
         if settings_class is None:
-            raise RuntimeError("substance_painter.project.Settings is not available in this Painter version.")
+            return {"mesh_path": mesh_path}
 
         attempts = [lambda: settings_class(), lambda: settings_class(mesh_path)]
         last_error = None
@@ -232,6 +240,28 @@ class LlodBatchRunner:
                 break
 
         return settings
+
+    def settings_to_dict(self, settings) -> dict:
+        if isinstance(settings, dict):
+            return dict(settings)
+
+        settings_dict = {}
+
+        for attribute_name in (
+            "default_save_path",
+            "normal_map_format",
+            "tangent_space_mode",
+            "project_workflow",
+            "export_path",
+            "default_texture_resolution",
+            "import_cameras",
+            "mesh_unit_scale",
+            "usd_settings",
+        ):
+            if hasattr(settings, attribute_name):
+                settings_dict[attribute_name] = getattr(settings, attribute_name)
+
+        return settings_dict
 
     def set_project_resolution(self, resolution: int) -> None:
         self.logger.log(f"Setting project resolution to {resolution}x{resolution}")
