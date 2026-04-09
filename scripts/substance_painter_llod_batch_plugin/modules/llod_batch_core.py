@@ -40,7 +40,7 @@ EXPORT_FOLDER = "D:\\shared\\3dModels\\PainterExports"
 SMART_MATERIAL_CONTEXT = ""
 EXPORT_PRESET_CONTEXT = ""
 EXPORT_PRESET_NAME = "PBR Metallic Roughness_copy"
-PLUGIN_VERSION = "2026-04-09.5"
+PLUGIN_VERSION = "2026-04-09.7"
 
 SIZE_TO_RESOLUTION = {
     "512": 512,
@@ -181,7 +181,8 @@ class LlodBatchRunner:
         material_tag = match.group("material").lower()
         size_tag = match.group("size").lower()
         resolution = SIZE_TO_RESOLUTION[size_tag]
-        high_poly_path = self.find_matching_high_poly(asset_name)
+        high_poly_asset_name = self.derive_high_poly_asset_name(file_name, asset_name)
+        high_poly_path = self.find_matching_high_poly(high_poly_asset_name)
 
         return JobSpec(
             low_poly_path=file_path,
@@ -192,6 +193,20 @@ class LlodBatchRunner:
             resolution=resolution,
             export_folder=self.ensure_directory(self.export_folder),
         )
+
+    def derive_high_poly_asset_name(self, low_poly_file_name: str, fallback_asset_name: str) -> str:
+        suffix_patterns = (
+            r"_LLOD_(greyrock|blackrock|oldwood|oldbroze|mixed)_(512|1k|2k|4k|8k)$",
+            r"_LLOD_(512|1k|2k|4k|8k)$",
+            r"_LLOD$",
+        )
+
+        for suffix_pattern in suffix_patterns:
+            stripped_name = re.sub(suffix_pattern, "", low_poly_file_name, flags=re.IGNORECASE)
+            if stripped_name != low_poly_file_name:
+                return stripped_name
+
+        return fallback_asset_name
 
     def find_matching_high_poly(self, asset_name: str) -> Optional[str]:
         direct_match = os.path.join(self.high_poly_folder, f"{asset_name}.fbx")
@@ -364,16 +379,30 @@ class LlodBatchRunner:
 
         self.configure_bake_settings(job)
 
-        bake_fn = getattr(baking_module, "bake_selected_textures_async", None)
-        if bake_fn is None:
-            bake_fn = getattr(baking_module, "bake_async", None)
+        bake_async_fn = getattr(baking_module, "bake_async", None)
+        bake_selected_fn = getattr(baking_module, "bake_selected_textures_async", None)
 
-        if bake_fn is None:
+        if bake_async_fn is None and bake_selected_fn is None:
             self.logger.log("WARNING: No baking function available in this Painter version; skipping bake.")
             return
 
-        self.logger.log("Starting mesh map bake")
-        bake_fn()
+        texture_sets = list(sp.textureset.all_texture_sets())
+        if not texture_sets:
+            self.logger.log("WARNING: No texture sets are available for baking; skipping bake.")
+            return
+
+        if callable(bake_async_fn):
+            for texture_set in texture_sets:
+                self.logger.log(f"Starting mesh map bake for texture set {texture_set.name()}")
+                bake_async_fn(texture_set)
+                self.wait_until_project_idle(
+                    f"bake mesh maps for texture set {texture_set.name()}",
+                    timeout_seconds=600.0,
+                )
+            return
+
+        self.logger.log("Starting mesh map bake for selected texture sets")
+        bake_selected_fn()
         self.wait_until_project_idle("bake mesh maps", timeout_seconds=600.0)
 
     def configure_bake_settings(self, job: JobSpec) -> None:
@@ -687,20 +716,6 @@ class LlodBatchRunner:
 
         attempts = [
             (
-                "selectHighDefinitionMeshes(list)",
-                (
-                    "alg.baking.selectHighDefinitionMeshes([" + high_poly_json + "]);"
-                    "JSON.stringify({ok:true});"
-                ),
-            ),
-            (
-                "selectHighDefinitionMeshes(path)",
-                (
-                    "alg.baking.selectHighDefinitionMeshes(" + high_poly_json + ");"
-                    "JSON.stringify({ok:true});"
-                ),
-            ),
-            (
                 "setCommonBakingParameters(object)",
                 (
                     "var params = alg.baking.commonBakingParameters();"
@@ -715,6 +730,29 @@ class LlodBatchRunner:
                     "  JSON.stringify({ok:true, keys:Object.keys(params).sort()});"
                     "} else {"
                     "  JSON.stringify({ok:false, reason:'no-params-object'});"
+                    "}"
+                ),
+            ),
+            (
+                "setTextureSetBakingParameters(object)",
+                (
+                    "var sets = (alg.texturesets && alg.texturesets.structure) ? alg.texturesets.structure() : [];"
+                    "var firstSet = (sets && sets.length) ? sets[0] : null;"
+                    "if (!firstSet) { JSON.stringify({ok:false, reason:'no-texture-set'}); }"
+                    "else {"
+                    "  var params = (alg.baking && alg.baking.textureSetBakingParameters) ? alg.baking.textureSetBakingParameters(firstSet) : null;"
+                    "  if (params && typeof params === 'object') {"
+                    "    params.highDefinitionMeshes = [" + high_poly_json + "];"
+                    "    params.highDefinitionMeshPaths = [" + high_poly_json + "];"
+                    "    params.highPolyMeshes = [" + high_poly_json + "];"
+                    "    params.highPolyMeshPaths = [" + high_poly_json + "];"
+                    "    params.outputSize = " + resolution_json + ";"
+                    "    params.resolution = " + resolution_json + ";"
+                    "    alg.baking.setTextureSetBakingParameters(firstSet, params);"
+                    "    JSON.stringify({ok:true, keys:Object.keys(params).sort()});"
+                    "  } else {"
+                    "    JSON.stringify({ok:false, reason:'no-texture-set-params'});"
+                    "  }"
                     "}"
                 ),
             ),
