@@ -205,15 +205,23 @@ class LlodBatchRunner:
         self.close_current_project()
         settings = self.build_project_settings(job.low_poly_path)
         settings_dict = self.settings_to_dict(settings)
-        self.logger.log(f"Creating project from {job.low_poly_path}")
+        mesh_filepath = str(job.low_poly_path)
+        self.logger.log(f"Creating project from {mesh_filepath}")
+        self.logger.log(
+            "create args: mesh_filepath_type={0}, settings_type={1}, settings_keys={2}".format(
+                type(mesh_filepath).__name__,
+                type(settings).__name__,
+                sorted(settings_dict.keys()),
+            )
+        )
         project_create = getattr(sp.project, "create", None)
         if project_create is None:
             raise RuntimeError("substance_painter.project.create is not available in this Painter version.")
 
-        try:
-            project_create(job.low_poly_path, [], "", settings_dict)
-        except TypeError:
-            project_create(settings)
+        if hasattr(sp.project, "Settings") and isinstance(settings, sp.project.Settings):
+            project_create(mesh_filepath, [], "", settings)
+        else:
+            project_create(mesh_filepath, [], "", settings_dict)
         self.wait_until_project_idle("create project")
 
     def build_project_settings(self, mesh_path: str):
