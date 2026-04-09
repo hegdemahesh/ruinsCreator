@@ -13,6 +13,19 @@ fn collectGeometryNodes =
     for node in geometry where isValidNode node collect node
 )
 
+fn previewGeometryNodes geometryNodes =
+(
+    if geometryNodes.count == 0 then return false
+
+    select geometryNodes
+    completeRedraw()
+    try (max zoomext sel all) catch ()
+    redrawViews()
+    try (windows.processPostedMessages()) catch ()
+
+    true
+)
+
 fn sanitizeTagValue rawValue =
 (
     local cleanedValue = trimRight (trimLeft rawValue)
@@ -141,10 +154,10 @@ fn promptForMaterialAndSize fileNameOnly =
     )
 )
 
-fn buildTaggedMaterial materialTag sizeTag =
+fn buildTaggedMaterial materialTag =
 (
     local taggedMaterial = PhysicalMaterial()
-    taggedMaterial.name = materialTag + "_" + sizeTag
+    taggedMaterial.name = materialTag
     taggedMaterial.base_color = color 180 180 180
     taggedMaterial.roughness = 0.75
     taggedMaterial
@@ -205,6 +218,8 @@ else
                 continue
             )
 
+            previewGeometryNodes geometryNodes
+
             local promptResult = promptForMaterialAndSize fileNameOnly
 
             if promptResult == #cancel then
@@ -220,7 +235,7 @@ else
             (
                 local materialTag = promptResult[1]
                 local sizeTag = promptResult[2]
-                local taggedMaterial = buildTaggedMaterial materialTag sizeTag
+                local taggedMaterial = buildTaggedMaterial materialTag
                 local outFile = outputFolder + fileNameOnly + "_" + materialTag + "_" + sizeTag + ".fbx"
 
                 assignMaterialToGeometry geometryNodes taggedMaterial
