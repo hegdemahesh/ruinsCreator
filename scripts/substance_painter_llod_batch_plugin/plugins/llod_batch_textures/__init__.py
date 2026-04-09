@@ -41,6 +41,7 @@ PLUGIN_VERSION = CORE_MODULE.PLUGIN_VERSION
 
 WIDGETS = []
 LOG_PANEL = None
+RUN_IN_PROGRESS = False
 
 
 class LogDockWidget(QtWidgets.QWidget):
@@ -81,6 +82,13 @@ class LogDockWidget(QtWidgets.QWidget):
         self.log_output.appendPlainText(message)
         scrollbar = self.log_output.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
+        application = QtWidgets.QApplication.instance()
+        if application is not None:
+            application.processEvents()
+
+    def set_running_state(self, is_running: bool) -> None:
+        self.run_button.setEnabled(not is_running)
+        self.clear_button.setEnabled(not is_running)
 
 
 def append_log(message: str) -> None:
@@ -89,6 +97,21 @@ def append_log(message: str) -> None:
 
 
 def run_batch_from_ui() -> None:
+    global RUN_IN_PROGRESS
+
+    if RUN_IN_PROGRESS:
+        append_log("[PainterBatch] Batch is already running.")
+        return
+
+    RUN_IN_PROGRESS = True
+    if LOG_PANEL is not None:
+        LOG_PANEL.set_running_state(True)
+
+    append_log("[PainterBatch] Scheduling batch run...")
+    QtCore.QTimer.singleShot(0, _run_batch_from_ui_impl)
+
+
+def _run_batch_from_ui_impl() -> None:
     global CORE_MODULE
     global BatchLogger
     global EXPORT_FOLDER
@@ -96,6 +119,7 @@ def run_batch_from_ui() -> None:
     global LOW_POLY_FOLDER
     global LlodBatchRunner
     global PLUGIN_VERSION
+    global RUN_IN_PROGRESS
 
     CORE_MODULE = _load_core_module()
     BatchLogger = CORE_MODULE.BatchLogger
@@ -108,9 +132,15 @@ def run_batch_from_ui() -> None:
     logger = BatchLogger(append_log)
     runner = LlodBatchRunner(logger=logger)
     try:
+        logger.log(f"Starting batch run. version={PLUGIN_VERSION}")
         runner.run_batch()
     except Exception as exc:
         logger.log(f"FATAL: {exc}")
+    finally:
+        RUN_IN_PROGRESS = False
+        if LOG_PANEL is not None:
+            LOG_PANEL.set_running_state(False)
+        append_log("[PainterBatch] Batch run finished.")
 
 
 def start_plugin() -> None:
