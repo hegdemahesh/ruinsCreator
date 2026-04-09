@@ -485,10 +485,36 @@ class LlodBatchRunner:
         if self.apply_smart_material_via_resource_api(resource):
             return
 
+        self.log_js_material_capabilities(resource_url)
+
         raise RuntimeError(
             "Smart material application is not supported by the Python API exposed in this Painter version. "
             "The project was created and baked, but no compatible material-assignment API was found."
         )
+
+    def log_js_material_capabilities(self, resource_url: str) -> None:
+        js_module = getattr(sp, "js", None)
+        evaluate = getattr(js_module, "evaluate", None) if js_module is not None else None
+        if not callable(evaluate):
+            self.logger.log("WARNING: Painter JavaScript bridge is not available for further smart material diagnostics.")
+            return
+
+        probes = {
+            "alg_keys": "JSON.stringify(Object.keys(alg).sort())",
+            "alg_resources_keys": "JSON.stringify((alg.resources && Object.keys(alg.resources).sort()) || [])",
+            "alg_layers_keys": "JSON.stringify((alg.layers && Object.keys(alg.layers).sort()) || [])",
+            "alg_mapexport_keys": "JSON.stringify((alg.mapexport && Object.keys(alg.mapexport).sort()) || [])",
+            "resource_lookup": 'JSON.stringify((alg.resources && alg.resources.findResources) ? alg.resources.findResources("your_assets", "*") : [])',
+        }
+
+        self.logger.log(f"Probing Painter JavaScript API for smart material fallback. resource={resource_url}")
+
+        for label, script in probes.items():
+            try:
+                result = evaluate(script)
+                self.logger.log(f"JS probe {label}: {result}")
+            except Exception as exc:
+                self.logger.log(f"WARNING: JS probe {label} failed: {exc}")
 
     def apply_smart_material_via_resource_api(self, resource) -> bool:
         list_function = getattr(sp.resource, "list_layer_stack_resources", None)
