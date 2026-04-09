@@ -46,22 +46,72 @@ fn getSceneNodes =
 
 fn promptForTargetHeight fileNameOnly currentHeightMeters =
 (
-    dotNet.loadAssembly "Microsoft.VisualBasic"
+    dotNet.loadAssembly "System.Windows.Forms"
+    dotNet.loadAssembly "System.Drawing"
 
-    local interactionClass = dotNetClass "Microsoft.VisualBasic.Interaction"
-    local promptText = "Inspect the FBX in the viewport and enter the target height in meters for:\n\n" + fileNameOnly + "\n\nCurrent height: " + (currentHeightMeters as string) + " m\n\nLeave blank to skip this file."
-    local response = interactionClass.InputBox promptText "Set Real-World Height" (currentHeightMeters as string)
+    local form = dotNetObject "System.Windows.Forms.Form"
+    local label = dotNetObject "System.Windows.Forms.Label"
+    local textBox = dotNetObject "System.Windows.Forms.TextBox"
+    local okButton = dotNetObject "System.Windows.Forms.Button"
+    local cancelButton = dotNetObject "System.Windows.Forms.Button"
+    local dialogResultClass = dotNetClass "System.Windows.Forms.DialogResult"
 
-    if response == "" then
+    form.Text = "Set Real-World Height"
+    form.Width = 420
+    form.Height = 220
+    form.FormBorderStyle = (dotNetClass "System.Windows.Forms.FormBorderStyle").FixedDialog
+    form.StartPosition = (dotNetClass "System.Windows.Forms.FormStartPosition").CenterScreen
+    form.MaximizeBox = false
+    form.MinimizeBox = false
+    form.TopMost = true
+
+    label.AutoSize = false
+    label.Left = 12
+    label.Top = 12
+    label.Width = 380
+    label.Height = 95
+    label.Text = "Inspect the FBX in the viewport and enter the target height in meters for:" + "\r\n\r\n" + fileNameOnly + "\r\n\r\nCurrent height: " + (currentHeightMeters as string) + " m"
+
+    textBox.Left = 12
+    textBox.Top = 115
+    textBox.Width = 380
+    textBox.Text = currentHeightMeters as string
+
+    okButton.Text = "OK"
+    okButton.Left = 226
+    okButton.Top = 145
+    okButton.Width = 80
+    okButton.DialogResult = dialogResultClass.OK
+
+    cancelButton.Text = "Skip"
+    cancelButton.Left = 312
+    cancelButton.Top = 145
+    cancelButton.Width = 80
+    cancelButton.DialogResult = dialogResultClass.Cancel
+
+    form.Controls.Add label
+    form.Controls.Add textBox
+    form.Controls.Add okButton
+    form.Controls.Add cancelButton
+    form.AcceptButton = okButton
+    form.CancelButton = cancelButton
+
+    local responseResult = form.ShowDialog()
+    local response = textBox.Text
+
+    if responseResult != dialogResultClass.OK then
     (
         if queryBox ("Skip " + fileNameOnly + " and continue with the next file?") title:"Batch Scale FBX" then #skip else #cancel
     )
     else
     (
+        response = trimRight (trimLeft response)
+
         local parsedHeight = undefined
         try (parsedHeight = response as float) catch ()
 
-        if parsedHeight == undefined or parsedHeight <= 0 then
+        if response == "" then #skip
+        else if parsedHeight == undefined or parsedHeight <= 0 then
         (
             messageBox "Please enter a positive number in meters." title:"Invalid Height"
             promptForTargetHeight fileNameOnly currentHeightMeters
