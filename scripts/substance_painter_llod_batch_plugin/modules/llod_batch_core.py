@@ -40,8 +40,9 @@ EXPORT_FOLDER = "D:\\shared\\3dModels\\PainterExports"
 SMART_MATERIAL_CONTEXT = ""
 EXPORT_PRESET_CONTEXT = ""
 EXPORT_PRESET_NAME = "PBR Metallic Roughness_copy"
-PLUGIN_VERSION = "2026-04-09.12"
+PLUGIN_VERSION = "2026-04-09.13"
 ENABLE_JS_BAKE_TRIGGER = False
+DISABLE_WORLD_SPACE_NORMAL_MAP = True
 
 SIZE_TO_RESOLUTION = {
     "512": 512,
@@ -553,13 +554,15 @@ class LlodBatchRunner:
 
                 high_poly_assigned = self.assign_high_poly_to_settings(settings_object, job.high_poly_path)
                 resolution_assigned = self.assign_resolution_to_settings(settings_object, job.resolution)
+                world_space_normal_disabled = self.assign_bake_option_flags(settings_object)
 
                 self.logger.log(
-                    "Bake settings prepared for stack={0}: settings_type={1}, high_poly_assigned={2}, resolution_assigned={3}".format(
+                    "Bake settings prepared for stack={0}: settings_type={1}, high_poly_assigned={2}, resolution_assigned={3}, world_space_normal_disabled={4}".format(
                         stack,
                         type(settings_object).__name__,
                         high_poly_assigned,
                         resolution_assigned,
+                        world_space_normal_disabled,
                     )
                 )
 
@@ -669,7 +672,7 @@ class LlodBatchRunner:
         return None
 
     def build_bake_settings_dict(self, high_poly_path: str, resolution: int) -> dict:
-        return {
+        settings_dict = {
             "high_definition_meshes": [high_poly_path],
             "highpoly_mesh_path": high_poly_path,
             "high_poly_mesh_path": high_poly_path,
@@ -679,6 +682,21 @@ class LlodBatchRunner:
             "resolution": resolution,
             "size": resolution,
         }
+
+        if DISABLE_WORLD_SPACE_NORMAL_MAP:
+            settings_dict.update(
+                {
+                    "world_space_normal": False,
+                    "world_space_normal_map": False,
+                    "world_space_normals": False,
+                    "compute_world_space_normal": False,
+                    "compute_world_space_normal_map": False,
+                    "enable_world_space_normal": False,
+                    "enable_world_space_normal_map": False,
+                }
+            )
+
+        return settings_dict
 
     def assign_high_poly_to_settings(self, settings_object, high_poly_path: str) -> bool:
         assigned = False
@@ -728,6 +746,38 @@ class LlodBatchRunner:
             nested_value = getattr(settings_object, nested_name, None)
             if nested_value is not None and nested_value is not settings_object:
                 if self.assign_resolution_to_settings(nested_value, resolution):
+                    assigned = True
+
+        return assigned
+
+    def assign_bake_option_flags(self, settings_object) -> bool:
+        if not DISABLE_WORLD_SPACE_NORMAL_MAP:
+            return False
+
+        assigned = False
+
+        for attribute_name in (
+            "world_space_normal",
+            "world_space_normal_map",
+            "world_space_normals",
+            "compute_world_space_normal",
+            "compute_world_space_normal_map",
+            "enable_world_space_normal",
+            "enable_world_space_normal_map",
+        ):
+            if not hasattr(settings_object, attribute_name):
+                continue
+            try:
+                setattr(settings_object, attribute_name, False)
+                assigned = True
+            except Exception as exc:
+                self.logger.log(f"WARNING: Could not set bake option {attribute_name}: {exc}")
+
+        nested_names = ("common_parameters", "common", "parameters")
+        for nested_name in nested_names:
+            nested_value = getattr(settings_object, nested_name, None)
+            if nested_value is not None and nested_value is not settings_object:
+                if self.assign_bake_option_flags(nested_value):
                     assigned = True
 
         return assigned
@@ -840,6 +890,12 @@ class LlodBatchRunner:
                     "  params.highPolyMeshPaths = [" + high_poly_json + "];"
                     "  params.outputSize = " + resolution_json + ";"
                     "  params.resolution = " + resolution_json + ";"
+                    "  params.worldSpaceNormal = false;"
+                    "  params.worldSpaceNormalMap = false;"
+                    "  params.computeWorldSpaceNormal = false;"
+                    "  params.computeWorldSpaceNormalMap = false;"
+                    "  params.enableWorldSpaceNormal = false;"
+                    "  params.enableWorldSpaceNormalMap = false;"
                     "  alg.baking.setCommonBakingParameters(params);"
                     "  JSON.stringify({ok:true, keys:Object.keys(params).sort()});"
                     "} else {"
@@ -862,6 +918,12 @@ class LlodBatchRunner:
                     "    params.highPolyMeshPaths = [" + high_poly_json + "];"
                     "    params.outputSize = " + resolution_json + ";"
                     "    params.resolution = " + resolution_json + ";"
+                    "    params.worldSpaceNormal = false;"
+                    "    params.worldSpaceNormalMap = false;"
+                    "    params.computeWorldSpaceNormal = false;"
+                    "    params.computeWorldSpaceNormalMap = false;"
+                    "    params.enableWorldSpaceNormal = false;"
+                    "    params.enableWorldSpaceNormalMap = false;"
                     "    alg.baking.setTextureSetBakingParameters(firstSet, params);"
                     "    JSON.stringify({ok:true, keys:Object.keys(params).sort()});"
                     "  } else {"
