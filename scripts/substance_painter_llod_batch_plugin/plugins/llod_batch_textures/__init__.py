@@ -1,5 +1,6 @@
 import os
 import sys
+import importlib
 
 import substance_painter as sp
 
@@ -21,8 +22,21 @@ MODULES_PATH = os.path.join(PLUGIN_ROOT, "modules")
 if MODULES_PATH not in sys.path:
     sys.path.insert(0, MODULES_PATH)
 
-from llod_batch_core import BatchLogger, EXPORT_FOLDER, HIGH_POLY_FOLDER, LOW_POLY_FOLDER, LlodBatchRunner
-from llod_batch_core import PLUGIN_VERSION
+
+def _load_core_module():
+    module_name = "llod_batch_core"
+    if module_name in sys.modules:
+        return importlib.reload(sys.modules[module_name])
+    return importlib.import_module(module_name)
+
+
+CORE_MODULE = _load_core_module()
+BatchLogger = CORE_MODULE.BatchLogger
+EXPORT_FOLDER = CORE_MODULE.EXPORT_FOLDER
+HIGH_POLY_FOLDER = CORE_MODULE.HIGH_POLY_FOLDER
+LOW_POLY_FOLDER = CORE_MODULE.LOW_POLY_FOLDER
+LlodBatchRunner = CORE_MODULE.LlodBatchRunner
+PLUGIN_VERSION = CORE_MODULE.PLUGIN_VERSION
 
 
 WIDGETS = []
@@ -75,6 +89,22 @@ def append_log(message: str) -> None:
 
 
 def run_batch_from_ui() -> None:
+    global CORE_MODULE
+    global BatchLogger
+    global EXPORT_FOLDER
+    global HIGH_POLY_FOLDER
+    global LOW_POLY_FOLDER
+    global LlodBatchRunner
+    global PLUGIN_VERSION
+
+    CORE_MODULE = _load_core_module()
+    BatchLogger = CORE_MODULE.BatchLogger
+    EXPORT_FOLDER = CORE_MODULE.EXPORT_FOLDER
+    HIGH_POLY_FOLDER = CORE_MODULE.HIGH_POLY_FOLDER
+    LOW_POLY_FOLDER = CORE_MODULE.LOW_POLY_FOLDER
+    LlodBatchRunner = CORE_MODULE.LlodBatchRunner
+    PLUGIN_VERSION = CORE_MODULE.PLUGIN_VERSION
+
     logger = BatchLogger(append_log)
     runner = LlodBatchRunner(logger=logger)
     try:
@@ -98,6 +128,7 @@ def start_plugin() -> None:
     append_log(f"[PainterBatch] Plugin loaded. version={PLUGIN_VERSION}")
     append_log(f"[PainterBatch] Plugin root: {PLUGIN_ROOT}")
     append_log(f"[PainterBatch] Module path: {MODULES_PATH}")
+    append_log(f"[PainterBatch] Core module file: {getattr(CORE_MODULE, '__file__', '<unknown>')}")
 
 
 def close_plugin() -> None:

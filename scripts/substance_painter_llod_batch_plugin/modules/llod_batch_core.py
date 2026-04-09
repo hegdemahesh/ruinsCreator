@@ -40,7 +40,7 @@ EXPORT_FOLDER = "D:\\shared\\3dModels\\PainterExports"
 SMART_MATERIAL_CONTEXT = ""
 EXPORT_PRESET_CONTEXT = ""
 EXPORT_PRESET_NAME = "PBR Metallic Roughness_copy"
-PLUGIN_VERSION = "2026-04-09.9"
+PLUGIN_VERSION = "2026-04-09.11"
 
 SIZE_TO_RESOLUTION = {
     "512": 512,
@@ -449,6 +449,10 @@ class LlodBatchRunner:
 
         self.configure_bake_settings(job)
 
+        if self.bake_mesh_maps_via_js():
+            self.wait_until_project_idle("bake mesh maps via JavaScript", timeout_seconds=600.0)
+            return
+
         bake_async_fn = getattr(baking_module, "bake_async", None)
         bake_selected_fn = getattr(baking_module, "bake_selected_textures_async", None)
 
@@ -474,6 +478,37 @@ class LlodBatchRunner:
         self.logger.log("Starting mesh map bake for selected texture sets")
         bake_selected_fn()
         self.wait_until_project_idle("bake mesh maps", timeout_seconds=600.0)
+
+    def bake_mesh_maps_via_js(self) -> bool:
+        if not self.has_js_bridge():
+            return False
+
+        attempts = [
+            (
+                "alg.baking.bake()",
+                "alg.baking.bake(); JSON.stringify({ok:true});",
+            ),
+            (
+                "alg.baking.bake(activeTextureSet)",
+                (
+                    "var activeSet = (alg.texturesets && alg.texturesets.getActiveTextureSet) ? alg.texturesets.getActiveTextureSet() : null;"
+                    "if (!activeSet) { JSON.stringify({ok:false, reason:'no-active-texture-set'}); }"
+                    "else { alg.baking.bake(activeSet); JSON.stringify({ok:true}); }"
+                ),
+            ),
+        ]
+
+        for label, script in attempts:
+            try:
+                result = self.evaluate_js(script)
+                self.logger.log(f"JS bake trigger {label}: {result}")
+                if result and '"ok":true' in str(result).lower():
+                    self.logger.log(f"Starting mesh map bake through JavaScript API: {label}")
+                    return True
+            except Exception as exc:
+                self.logger.log(f"WARNING: JS bake trigger {label} failed: {exc}")
+
+        return False
 
     def configure_bake_settings(self, job: JobSpec) -> None:
         if job.high_poly_path is None:
