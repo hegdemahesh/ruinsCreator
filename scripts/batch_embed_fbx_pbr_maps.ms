@@ -48,6 +48,26 @@ fn createBitmapMap texturePath =
     textureMap
 )
 
+fn createNormalBumpMap texturePath logStream =
+(
+    local normalBitmap = createBitmapMap texturePath
+    local normalWrapper = undefined
+
+    try
+    (
+        normalWrapper = Normal_Bump()
+        normalWrapper.name = getFilenameFile texturePath
+        try (normalWrapper.normal_map = normalBitmap) catch ()
+        try (normalWrapper.method = 1) catch ()
+        normalWrapper
+    )
+    catch
+    (
+        logLine logStream ("    WARNING: Could not create Normal_Bump wrapper, falling back to bitmap normal: " + getExceptionText())
+        normalBitmap
+    )
+)
+
 fn assignMapPropertyCandidates targetMaterial propertyNames enabledPropertyNames textureMap logStream label =
 (
     if textureMap == undefined then return false
@@ -123,7 +143,7 @@ fn applyPbrMaps targetMaterial textureFolder assetName logStream =
     )
 
     local baseColorMap = createBitmapMap baseColorPath
-    local normalMap = if normalPath != undefined then createBitmapMap normalPath else undefined
+    local normalMap = if normalPath != undefined then createNormalBumpMap normalPath logStream else undefined
     local roughnessMap = if roughnessPath != undefined then createBitmapMap roughnessPath else undefined
     local metallicMap = if metallicPath != undefined then createBitmapMap metallicPath else undefined
     local heightMap = if heightPath != undefined then createBitmapMap heightPath else undefined
@@ -168,7 +188,7 @@ fn applyPbrMaps targetMaterial textureFolder assetName logStream =
 
     if aoPath != undefined then
     (
-        logLine logStream ("    INFO: AO map found but not assigned yet: " + aoPath)
+        logLine logStream ("    INFO: AO map found but FBX has no reliable standalone AO channel, so it is not assigned: " + aoPath)
     )
 
     true
