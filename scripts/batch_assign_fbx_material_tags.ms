@@ -1,4 +1,4 @@
-inputFolder = @"D:\shared\3dModels\AImodels04\"
+inputFolder = @"D:\shared\3dModels\objects\"
 outputFolder = @"D:\shared\3dModels\AImodels06\"
 
 fn ensureTrailingSlash folderPath =

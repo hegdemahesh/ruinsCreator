@@ -1,4 +1,4 @@
-inputFolder = @"D:\shared\3dModels\AImodels03\"
+inputFolder = @"D:\shared\3dModels\objects\"
 mapsFolder = @"D:\shared\3dModels\PainterExports\"
 outputFolder = @"D:\shared\3dModels\AImodels07\"
 
@@ -27,55 +27,15 @@ fn collectGeometryNodes =
     for node in geometry where isValidNode node collect node
 )
 
-fn sanitizeTextureToken rawValue =
-(
-    if rawValue == undefined then return ""
-
-    local cleanedValue = trimRight (trimLeft (rawValue as string))
-    cleanedValue = substituteString cleanedValue " " "_"
-    cleanedValue = substituteString cleanedValue "/" "_"
-    cleanedValue = substituteString cleanedValue "\\" "_"
-    cleanedValue = substituteString cleanedValue ":" "_"
-    cleanedValue = substituteString cleanedValue "*" ""
-    cleanedValue = substituteString cleanedValue "?" ""
-    cleanedValue = substituteString cleanedValue "\"" ""
-    cleanedValue = substituteString cleanedValue "<" ""
-    cleanedValue = substituteString cleanedValue ">" ""
-    cleanedValue = substituteString cleanedValue "|" ""
-    cleanedValue
-)
-
-fn getMaterialToken geometryNodes logStream =
-(
-    for node in geometryNodes where isValidNode node do
-    (
-        if node.material != undefined then
-        (
-            local token = sanitizeTextureToken node.material.name
-            if token != "" then
-            (
-                logLine logStream ("    Using material token: " + token)
-                return token
-            )
-        )
-    )
-
-    logLine logStream "    INFO: No source material name found on mesh."
-    undefined
-)
-
-fn findTextureFile textureFolder assetName materialToken textureSuffix =
+fn findTextureFile textureFolder assetName textureSuffix =
 (
     local matches = #()
 
-    if materialToken != undefined and materialToken != "" then
-    (
-        matches = getFiles (textureFolder + assetName + "_" + materialToken + "_" + textureSuffix + ".*")
-    )
+    matches = getFiles (textureFolder + assetName + "_" + textureSuffix + ".*")
 
     if matches.count == 0 then
     (
-        matches = getFiles (textureFolder + assetName + "_" + textureSuffix + ".*")
+        matches = getFiles (textureFolder + assetName + "*_" + textureSuffix + ".*")
     )
 
     if matches.count > 0 then matches[1] else undefined
@@ -147,14 +107,14 @@ fn assignMaterialToGeometry geometryNodes materialToAssign =
     )
 )
 
-fn applyPbrMaps targetMaterial textureFolder assetName materialToken logStream =
+fn applyPbrMaps targetMaterial textureFolder assetName logStream =
 (
-    local baseColorPath = findTextureFile textureFolder assetName materialToken "BaseColor"
-    local normalPath = findTextureFile textureFolder assetName materialToken "Normal"
-    local roughnessPath = findTextureFile textureFolder assetName materialToken "Roughness"
-    local metallicPath = findTextureFile textureFolder assetName materialToken "Metallic"
-    local heightPath = findTextureFile textureFolder assetName materialToken "Height"
-    local aoPath = findTextureFile textureFolder assetName materialToken "AO"
+    local baseColorPath = findTextureFile textureFolder assetName "BaseColor"
+    local normalPath = findTextureFile textureFolder assetName "Normal"
+    local roughnessPath = findTextureFile textureFolder assetName "Roughness"
+    local metallicPath = findTextureFile textureFolder assetName "Metallic"
+    local heightPath = findTextureFile textureFolder assetName "Height"
+    local aoPath = findTextureFile textureFolder assetName "AO"
 
     if baseColorPath == undefined then
     (
@@ -301,10 +261,9 @@ else
                     continue
                 )
 
-                local materialToken = getMaterialToken geometryNodes logStream
                 local targetMaterial = getOrCreatePhysicalMaterial geometryNodes fileNameOnly logStream
 
-                if not applyPbrMaps targetMaterial mapsFolder fileNameOnly materialToken logStream then
+                if not applyPbrMaps targetMaterial mapsFolder fileNameOnly logStream then
                 (
                     skippedCount += 1
                     logLine logStream "    Skipping export because BaseColor is missing."
