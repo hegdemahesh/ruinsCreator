@@ -3,7 +3,7 @@ inputFolder = @"D:\shared\3dModels\objects\"
 global batchRotateFbxState = undefined
 global batchRotateFbxRollout = undefined
 
-struct BatchRotateFbxState
+struct BatchRotateFbxSessionState
 (
     fileNameOnly,
     rotationRoot,
@@ -202,7 +202,7 @@ fn promptForRotation fileNameOnly geometryNodes =
     local rotationRoot = buildRotationRoot geometryNodes
     if rotationRoot == undefined then return #skip
 
-    batchRotateFbxState = BatchRotateFbxState fileNameOnly:fileNameOnly rotationRoot:rotationRoot geometryNodes:geometryNodes currentAngle:0.0 requestedAction:undefined
+    batchRotateFbxState = BatchRotateFbxSessionState fileNameOnly:fileNameOnly rotationRoot:rotationRoot geometryNodes:geometryNodes currentAngle:0.0 requestedAction:undefined
     createDialog batchRotateFbxRollout modal:true style:#(#style_titlebar, #style_sysmenu)
 
     local requestedAction = batchRotateFbxState.requestedAction
