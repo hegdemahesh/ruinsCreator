@@ -200,7 +200,6 @@ fn showReportWindow reportText =
     local textBox = dotNetObject "System.Windows.Forms.TextBox"
     local copyButton = dotNetObject "System.Windows.Forms.Button"
     local closeButton = dotNetObject "System.Windows.Forms.Button"
-    local messageBoxClass = dotNetClass "System.Windows.Forms.MessageBox"
 
     form.Text = "FBX Fab Stats Report"
     form.Width = 980
@@ -231,13 +230,14 @@ fn showReportWindow reportText =
     dotNet.addEventHandler copyButton "Click" (fn copyReport sender args =
     (
         local clipboardClass = dotNetClass "System.Windows.Forms.Clipboard"
-        clipboardClass.SetText textBox.Text
+        local messageBoxClass = dotNetClass "System.Windows.Forms.MessageBox"
+        clipboardClass.SetText batchReportFbxFabStatsText
         messageBoxClass.Show "Report copied to clipboard." "FBX Fab Stats"
     ))
 
     dotNet.addEventHandler closeButton "Click" (fn closeReport sender args =
     (
-        form.Close()
+        try (sender.Parent.Close()) catch ()
     ))
 
     form.Controls.Add textBox

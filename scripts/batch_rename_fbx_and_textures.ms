@@ -74,6 +74,22 @@ fn startsWithText sourceText prefixText =
     else (substring sourceText 1 prefixText.count) == prefixText
 )
 
+fn normalizePathForComparison filePath =
+(
+    if filePath == undefined then return ""
+
+    local normalizedPath = filePath as string
+    try (normalizedPath = pathConfig.convertPathToAbsolute normalizedPath) catch ()
+    pathConfig.convertPathToLowerCase normalizedPath
+)
+
+fn areSameFilePath leftPath rightPath =
+(
+    local normalizedLeft = normalizePathForComparison leftPath
+    local normalizedRight = normalizePathForComparison rightPath
+    normalizedLeft != "" and normalizedLeft == normalizedRight
+)
+
 fn findTextureFile textureFolder assetName textureSuffix =
 (
     local matches = #()
@@ -281,6 +297,13 @@ fn copyRenamedTextures sourceTexturePaths sourceAssetName newAssetName destinati
         local sourceExtension = getFilenameType sourceTexturePath
         local suffixText = if sourceFileName.count > sourceAssetName.count then substring sourceFileName (sourceAssetName.count + 1) (sourceFileName.count - sourceAssetName.count) else ""
         local renamedFilePath = destinationTexturesFolder + newAssetName + suffixText + sourceExtension
+
+        if areSameFilePath sourceTexturePath renamedFilePath then
+        (
+            append copiedFiles renamedFilePath
+            logLine logStream ("    Skipped texture copy because source and destination are the same file: " + renamedFilePath)
+            continue
+        )
 
         if doesFileExist renamedFilePath do deleteFile renamedFilePath
 
